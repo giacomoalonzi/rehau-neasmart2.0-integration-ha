@@ -1,7 +1,7 @@
 """Platform for sensor integration."""
 
 import logging
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorEntity, SensorDeviceClass
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.restore_state import RestoreEntity
 
@@ -9,7 +9,6 @@ from homeassistant.const import (
     TEMPERATURE,
     UnitOfTemperature,
     PERCENTAGE,
-    DEVICE_CLASS_HUMIDITY,
 )
 from .const import DOMAIN, PRESENCE_STATES, BINARY_STATUSES
 
@@ -263,7 +262,7 @@ class RehauNeasmart2DehumidifierStateSensor(RehauNeasmart2GenericSensor):
 
 class RehauNeasmart2ZoneHumidity(RehauNeasmart2GenericSensor):
 
-    device_class = DEVICE_CLASS_HUMIDITY
+    device_class = SensorDeviceClass.HUMIDITY
     _attr_native_unit_of_measurement = PERCENTAGE
 
     def __init__(self, device):
