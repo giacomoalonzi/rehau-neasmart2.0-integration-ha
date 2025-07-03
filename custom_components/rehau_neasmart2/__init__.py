@@ -20,16 +20,10 @@ PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.CLIMATE, Platform.SELECT]
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Rehau Neasmart 2.0 from a config entry."""
     
-    # Create hub instance
+    # Create hub instance with new configuration structure
     climate_system = hub.RehauNeasmart2ClimateControlSystem(
         hass,
-        entry.data["climate_system_name"],
-        entry.data["neasmart_gw_server_host"],
-        entry.data["neasmart_gw_server_port"],
-        entry.data["zones"],
-        entry.data.get("mixed_groups", 0),
-        entry.data.get("pumps_regs_mapping", ""),
-        entry.data.get("dehumidificators_regs_mapping", "")
+        entry.data
     )
     
     # Initialize HTTP client
@@ -78,3 +72,39 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload config entry."""
     await async_unload_entry(hass, entry)
     await async_setup_entry(hass, entry)
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate old entry."""
+    _LOGGER.debug("Migrating from version %s", entry.version)
+
+    if entry.version == 1:
+        # Already at version 1, check if old format needs migration
+        data = dict(entry.data)
+        
+        # Check if it's old format (has neasmart_gw_server_host)
+        if "neasmart_gw_server_host" in data:
+            # Migrate from old format to new format
+            old_zones = data.get("zones", "").split(",")
+            zones = []
+            for i, zone_name in enumerate(old_zones):
+                if zone_name.strip():
+                    base_id = (i // 12) + 1
+                    zone_id = (i % 12) + 1
+                    zones.append({
+                        "base_id": base_id,
+                        "zone_id": zone_id,
+                        "label": zone_name.strip()
+                    })
+            
+            new_data = {
+                "climate_system_name": data.get("climate_system_name", "Rehau Neasmart 2.0"),
+                "api_url": data.get("neasmart_gw_server_host", ""),
+                "api_port": data.get("neasmart_gw_server_port", 80),
+                "zones": zones
+            }
+            
+            hass.config_entries.async_update_entry(entry, data=new_data)
+            _LOGGER.info("Migration to new format successful")
+
+    return True

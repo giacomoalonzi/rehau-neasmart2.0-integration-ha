@@ -16,11 +16,23 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import DOMAIN, PRESET_STATES_MAPPING, PRESET_STATES_MAPPING_REVERSE
+from .const import DOMAIN
 from .exceptions import DataValidationError
-from .models import PresetState
+from .models import Zone, OperationState
 
 _LOGGER = logging.getLogger(__name__)
+
+# Mapping between Home Assistant preset modes and API operation states
+PRESET_MODE_MAPPING = {
+    "normal": OperationState.NORMAL,
+    "reduced": OperationState.REDUCED,
+    "standby": OperationState.STANDBY,
+    "scheduled": OperationState.SCHEDULED,
+    "party": OperationState.PARTY,
+    "holiday": OperationState.HOLIDAY,
+}
+
+PRESET_MODE_MAPPING_REVERSE = {v: k for k, v in PRESET_MODE_MAPPING.items()}
 
 
 async def async_setup_entry(
@@ -113,7 +125,7 @@ class RehauNeasmart2ZoneClimateEntity(RehauNeasmart2GenericClimateEntity):
         )
         
         # Preset modes
-        self._attr_preset_modes = list(PRESET_STATES_MAPPING.keys())
+        self._attr_preset_modes = list(PRESET_MODE_MAPPING.keys())
         self._attr_preset_mode = None
         
         # Temperature attributes
@@ -125,6 +137,9 @@ class RehauNeasmart2ZoneClimateEntity(RehauNeasmart2GenericClimateEntity):
         self._attr_min_temp = 5.0
         self._attr_max_temp = 30.0
         self._attr_target_temperature_step = 0.5
+        
+        # Store zone data
+        self._zone_data: Optional[Zone] = None
 
     async def async_update(self) -> None:
         """Update zone climate entity state."""
@@ -134,29 +149,20 @@ class RehauNeasmart2ZoneClimateEntity(RehauNeasmart2GenericClimateEntity):
             if zone_data is None:
                 raise DataValidationError("No data received from zone")
             
-            # Validate required fields
-            required_fields = ["state", "relative_humidity", "temperature", "setpoint"]
-            missing_fields = [f for f in required_fields if f not in zone_data]
-            if missing_fields:
-                raise DataValidationError(f"Missing fields in zone data: {missing_fields}")
+            self._zone_data = zone_data
             
             # Update state from zone data
-            try:
-                state = PresetState(zone_data["state"])
-                self._attr_preset_mode = PRESET_STATES_MAPPING_REVERSE.get(state)
-            except ValueError:
-                _LOGGER.warning(
-                    "Unknown state value %s for %s",
-                    zone_data["state"],
-                    self._attr_unique_id
-                )
+            self._attr_preset_mode = PRESET_MODE_MAPPING_REVERSE.get(zone_data.state)
             
             # Update measurements
-            self._attr_current_humidity = float(zone_data["relative_humidity"])
-            self._attr_current_temperature = float(zone_data["temperature"])
-            self._attr_target_temperature = float(zone_data["setpoint"])
+            self._attr_current_humidity = float(zone_data.relative_humidity)
+            self._attr_current_temperature = float(zone_data.temperature.value)
             
-            # Validate temperature ranges
+            # Update target temperature if available
+            if zone_data.setpoint:
+                self._attr_target_temperature = float(zone_data.setpoint.value)
+            
+            # Validate ranges
             if not -50 <= self._attr_current_temperature <= 100:
                 _LOGGER.warning(
                     "Temperature %s out of range for %s",
@@ -183,7 +189,7 @@ class RehauNeasmart2ZoneClimateEntity(RehauNeasmart2GenericClimateEntity):
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Set new preset mode."""
-        if preset_mode not in PRESET_STATES_MAPPING:
+        if preset_mode not in PRESET_MODE_MAPPING:
             _LOGGER.error(
                 "Invalid preset mode %s for %s",
                 preset_mode,
@@ -192,8 +198,8 @@ class RehauNeasmart2ZoneClimateEntity(RehauNeasmart2GenericClimateEntity):
             return
         
         try:
-            state_value = PRESET_STATES_MAPPING[preset_mode]
-            success = await self._device.set_zone_state(state_value)
+            operation_state = PRESET_MODE_MAPPING[preset_mode]
+            success = await self._device.set_zone_state(operation_state)
             
             if success:
                 self._attr_preset_mode = preset_mode
@@ -263,3 +269,20 @@ class RehauNeasmart2ZoneClimateEntity(RehauNeasmart2GenericClimateEntity):
                 )
             if last_state.attributes.get("preset_mode"):
                 self._attr_preset_mode = last_state.attributes["preset_mode"]
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Return extra state attributes."""
+        attrs = {}
+        
+        if self._zone_data:
+            attrs["base_id"] = self._zone_data.base.id
+            attrs["zone_id"] = self._zone_data.zone.id
+            attrs["base_label"] = self._zone_data.base.label
+            attrs["zone_label"] = self._zone_data.zone.label
+            attrs["address"] = self._zone_data.address
+            
+            if self._zone_data.temperature:
+                attrs["temperature_unit"] = self._zone_data.temperature.unit.value
+        
+        return attrs

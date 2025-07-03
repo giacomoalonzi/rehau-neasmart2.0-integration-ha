@@ -1,9 +1,9 @@
-"""HTTP client for Rehau Neasmart 2.0 shim server communication."""
+"""HTTP client for Rehau Neasmart 2.0 API communication."""
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 
 import aiohttp
@@ -11,20 +11,25 @@ from aiohttp import ClientError, ClientTimeout
 
 from .exceptions import ConnectionError, CommandFailedError, DataValidationError
 from .cache import DataCache
+from .models import (
+    Zone, ZonesListResponse, OperationState, OperationStateResponse,
+    HealthResponse, HealthStatus, Temperature, BaseInfo, ZoneInfo
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 10
 MAX_RETRIES = 3
 RETRY_DELAY = 1
+API_VERSION = "/api/v1"
 
 
 class HttpClient:
     """HTTP client with retry logic and error handling."""
 
-    def __init__(self, base_url: str, timeout: int = DEFAULT_TIMEOUT) -> None:
+    def __init__(self, base_url: str, port: int, timeout: int = DEFAULT_TIMEOUT) -> None:
         """Initialize the HTTP client."""
-        self.base_url = base_url
+        self.base_url = f"http://{base_url}:{port}"
         self.timeout = ClientTimeout(total=timeout)
         self._session: Optional[aiohttp.ClientSession] = None
 
@@ -59,7 +64,9 @@ class HttpClient:
         if not self._session:
             await self.connect()
 
-        url = urljoin(self.base_url, endpoint)
+        # Prepend API version to endpoint
+        full_endpoint = f"{API_VERSION}{endpoint}"
+        url = urljoin(self.base_url, full_endpoint.lstrip('/'))
         
         for attempt in range(MAX_RETRIES):
             try:
@@ -71,12 +78,21 @@ class HttpClient:
                 async with self._session.request(
                     method, url, json=json, **kwargs
                 ) as response:
-                    response.raise_for_status()
-                    
+                    # Handle both success and error responses
                     if response.content_type == 'application/json':
-                        return await response.json()
+                        data = await response.json()
+                        
+                        # Check for error responses
+                        if response.status >= 400:
+                            error_msg = data.get("error", "Unknown error")
+                            if response.status == 503:
+                                raise ConnectionError(f"Service unavailable: {error_msg}")
+                            else:
+                                raise CommandFailedError(f"API error {response.status}: {error_msg}")
+                        
+                        return data
                     else:
-                        # For non-JSON responses, return status info
+                        response.raise_for_status()
                         return {"status": response.status}
                         
             except ClientError as err:
@@ -103,14 +119,6 @@ class HttpClient:
         """Make POST request."""
         return await self._request("POST", endpoint, json=json, **kwargs)
 
-    async def health_check(self) -> bool:
-        """Check if the server is healthy."""
-        try:
-            response = await self.get("/health")
-            return response.get("status") == 200
-        except ConnectionError:
-            return False
-
 
 class RehauNeasmart2ApiClient:
     """API client for Rehau Neasmart 2.0 operations with caching."""
@@ -120,158 +128,134 @@ class RehauNeasmart2ApiClient:
         self.http = http_client
         self._cache = DataCache()
 
-    async def get_outside_temperature(self) -> float:
-        """Get outside temperature."""
+    async def health_check(self) -> HealthResponse:
+        """Check system health."""
+        data = await self.http.get("/health")
+        return HealthResponse(
+            status=HealthStatus(data["status"]),
+            version=data["version"],
+            database=data["database"],
+            modbus=data["modbus"],
+            configuration=data["configuration"]
+        )
+
+    async def get_zones(self) -> List[Zone]:
+        """Get all zones."""
         async def fetch():
-            try:
-                data = await self.http.get("/outsidetemperature")
-                temp = data.get("outside_temperature")
-                if temp is None:
-                    raise DataValidationError("Missing outside_temperature in response")
-                return float(temp)
-            except (ValueError, TypeError) as err:
-                raise DataValidationError(f"Invalid temperature value: {err}") from err
+            data = await self.http.get("/zones")
+            zones = []
+            for zone_data in data["zones"]:
+                zone = self._parse_zone(zone_data)
+                zones.append(zone)
+            return zones
         
-        return await self._cache.get_or_fetch("outside_temperature", fetch)
+        return await self._cache.get_or_fetch("zones_list", fetch)
 
-    async def get_filtered_outside_temperature(self) -> float:
-        """Get filtered outside temperature."""
-        async def fetch():
-            try:
-                data = await self.http.get("/outsidetemperature")
-                temp = data.get("filtered_outside_temperature")
-                if temp is None:
-                    raise DataValidationError("Missing filtered_outside_temperature in response")
-                return float(temp)
-            except (ValueError, TypeError) as err:
-                raise DataValidationError(f"Invalid temperature value: {err}") from err
-        
-        return await self._cache.get_or_fetch("filtered_outside_temperature", fetch)
-
-    async def get_notifications(self) -> Dict[str, bool]:
-        """Get all notifications status."""
-        async def fetch():
-            data = await self.http.get("/notifications")
-            return {
-                "hints": bool(data.get("hints_present", False)),
-                "warnings": bool(data.get("warnings_present", False)),
-                "errors": bool(data.get("error_present", False))
-            }
-        
-        return await self._cache.get_or_fetch("notifications", fetch)
-
-    async def get_global_state(self) -> int:
-        """Get global state."""
-        async def fetch():
-            data = await self.http.get("/state")
-            state = data.get("state")
-            if state is None:
-                raise DataValidationError("Missing state in response")
-            return int(state)
-        
-        return await self._cache.get_or_fetch("global_state", fetch)
-
-    async def set_global_state(self, state: int) -> None:
-        """Set global state."""
-        response = await self.http.post("/state", {"state": state})
-        if response.get("status") != 202:
-            raise CommandFailedError(f"Failed to set global state to {state}")
-        # Invalidate cache after state change
-        self._cache.invalidate("global_state")
-
-    async def get_global_mode(self) -> int:
-        """Get global mode."""
-        async def fetch():
-            data = await self.http.get("/mode")
-            mode = data.get("mode")
-            if mode is None:
-                raise DataValidationError("Missing mode in response")
-            return int(mode)
-        
-        return await self._cache.get_or_fetch("global_mode", fetch)
-
-    async def set_global_mode(self, mode: int) -> None:
-        """Set global mode."""
-        response = await self.http.post("/mode", {"mode": mode})
-        if response.get("status") != 202:
-            raise CommandFailedError(f"Failed to set global mode to {mode}")
-        # Invalidate cache after mode change
-        self._cache.invalidate("global_mode")
-
-    async def get_zone_data(self, base_id: int, zone_id: int) -> Dict[str, Any]:
-        """Get zone data."""
+    async def get_zone(self, base_id: int, zone_id: int) -> Zone:
+        """Get specific zone information."""
         cache_key = f"zone_{base_id}_{zone_id}"
         
         async def fetch():
             data = await self.http.get(f"/zones/{base_id}/{zone_id}")
-            
-            # Validate required fields
-            required_fields = ["state", "relative_humidity", "temperature", "setpoint"]
-            for field in required_fields:
-                if field not in data:
-                    raise DataValidationError(f"Missing required field '{field}' in zone data")
-            
-            return data
+            return self._parse_zone(data)
         
         return await self._cache.get_or_fetch(cache_key, fetch)
 
-    async def set_zone_setpoint(self, base_id: int, zone_id: int, setpoint: float) -> None:
-        """Set zone setpoint temperature."""
-        response = await self.http.post(
-            f"/zones/{base_id}/{zone_id}",
-            {"setpoint": setpoint}
-        )
-        if response.get("status") != 202:
-            raise CommandFailedError(f"Failed to set zone setpoint to {setpoint}")
-        # Invalidate zone cache after change
+    async def update_zone(
+        self, 
+        base_id: int, 
+        zone_id: int, 
+        state: Optional[OperationState] = None,
+        setpoint: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """Update zone state and/or setpoint."""
+        payload = {}
+        if state is not None:
+            payload["state"] = state.value
+        if setpoint is not None:
+            payload["setpoint"] = setpoint
+        
+        if not payload:
+            raise ValueError("At least one of state or setpoint must be provided")
+        
+        response = await self.http.post(f"/zones/{base_id}/{zone_id}", payload)
+        
+        # Invalidate cache after update
         self._cache.invalidate(f"zone_{base_id}_{zone_id}")
+        self._cache.invalidate("zones_list")
+        
+        return response
 
-    async def set_zone_state(self, base_id: int, zone_id: int, state: int) -> None:
-        """Set zone state."""
-        response = await self.http.post(
-            f"/zones/{base_id}/{zone_id}",
-            {"state": state}
+    async def get_operation_state(self) -> OperationState:
+        """Get global operation state."""
+        async def fetch():
+            data = await self.http.get("/operation/state")
+            return OperationState(data["state"])
+        
+        return await self._cache.get_or_fetch("operation_state", fetch)
+
+    async def set_operation_state(self, state: OperationState) -> Dict[str, Any]:
+        """Set global operation state."""
+        response = await self.http.post("/operation/state", {"state": state.value})
+        
+        # Invalidate cache after update
+        self._cache.invalidate("operation_state")
+        
+        return response
+
+    async def fetch_zones_configuration(self) -> List[Dict[str, Any]]:
+        """Fetch all zones configuration for setup wizard."""
+        try:
+            zones_data = await self.http.get("/zones")
+            zones = []
+            
+            for zone_data in zones_data["zones"]:
+                zones.append({
+                    "base_id": zone_data["base"]["id"],
+                    "zone_id": zone_data["zone"]["id"],
+                    "label": zone_data["zone"]["label"],
+                    "editable": True  # Allow user to edit label
+                })
+            
+            return zones
+        except Exception as err:
+            _LOGGER.error("Failed to fetch zones configuration: %s", err)
+            raise
+
+    def _parse_zone(self, data: Dict[str, Any]) -> Zone:
+        """Parse zone data from API response."""
+        base = BaseInfo(
+            id=data["base"]["id"],
+            label=data["base"]["label"]
         )
-        if response.get("status") != 202:
-            raise CommandFailedError(f"Failed to set zone state to {state}")
-        # Invalidate zone cache after change
-        self._cache.invalidate(f"zone_{base_id}_{zone_id}")
+        
+        zone_info = ZoneInfo(
+            id=data["zone"]["id"],
+            label=data["zone"]["label"]
+        )
+        
+        temperature = Temperature(
+            value=data["temperature"]["value"],
+            unit=data["temperature"]["unit"]
+        )
+        
+        setpoint = None
+        if data.get("setpoint"):
+            setpoint = Temperature(
+                value=data["setpoint"]["value"],
+                unit=data["setpoint"]["unit"]
+            )
+        
+        return Zone(
+            base=base,
+            zone=zone_info,
+            state=OperationState(data["state"]),
+            temperature=temperature,
+            setpoint=setpoint,
+            relative_humidity=data["relative_humidity"],
+            address=data["address"]
+        )
 
-    async def get_mixed_group_data(self, mixg_id: int) -> Dict[str, Any]:
-        """Get mixed group data."""
-        cache_key = f"mixedgroup_{mixg_id}"
-        
-        async def fetch():
-            return await self.http.get(f"/mixedgroups/{mixg_id}")
-        
-        return await self._cache.get_or_fetch(cache_key, fetch)
-
-    async def get_dehumidifier_state(self, dehumidifier_id: int) -> int:
-        """Get dehumidifier state."""
-        cache_key = f"dehumidifier_{dehumidifier_id}"
-        
-        async def fetch():
-            data = await self.http.get(f"/dehumidifiers/{dehumidifier_id}")
-            state = data.get("dehumidifier_state")
-            if state is None:
-                raise DataValidationError("Missing dehumidifier_state in response")
-            return int(state)
-        
-        return await self._cache.get_or_fetch(cache_key, fetch)
-
-    async def get_pump_state(self, pump_id: int) -> int:
-        """Get pump state."""
-        cache_key = f"pump_{pump_id}"
-        
-        async def fetch():
-            data = await self.http.get(f"/pumps/{pump_id}")
-            state = data.get("pump_state")
-            if state is None:
-                raise DataValidationError("Missing pump_state in response")
-            return int(state)
-        
-        return await self._cache.get_or_fetch(cache_key, fetch)
-    
     def invalidate_cache(self, key: Optional[str] = None) -> None:
         """Invalidate cache entries."""
         self._cache.invalidate(key) 

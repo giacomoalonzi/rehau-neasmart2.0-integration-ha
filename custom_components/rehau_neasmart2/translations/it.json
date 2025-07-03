@@ -1,30 +1,85 @@
 {
-    "config": {
-        "abort": {
-            "already_configured": "Il dispositivo è già configurato"
+  "config": {
+    "abort": {
+      "already_configured": "Il dispositivo è già configurato"
+    },
+    "error": {
+      "cannot_connect": "Impossibile connettersi al server API",
+      "no_zones_found": "Nessuna zona trovata sul server API",
+      "invalid_config": "Configurazione non valida",
+      "invalid_endpoint": "Formato endpoint non valido. Dovrebbe essere host:porta o un URL completo.",
+      "unknown": "Errore sconosciuto"
+    },
+    "step": {
+      "user": {
+        "title": "Connessione API",
+        "description": "Inserisci i dettagli di connessione per il server API Rehau Neasmart 2.0",
+        "data": {
+          "api_endpoint": "Endpoint API"
         },
-        "error": {
-            "cannot_connect": "Impossibile connettersi al server Modbus/Rest shim",
-            "too_many_zones": "Troppe zone specificate, il massimo è 48",
-            "too_many_mixg": "Troppi gruppi misti specificati, il massimo è 3",
-            "too_many_dehumidificators": "Troppi deumidificatori specificati, il massimo è 9",
-            "invalid_dehumidificator_index": "Indice deumidificatore non valido specificato, gli indici validi sono tra 1 e 9",
-            "too_many_extra_pump": "Troppe pompe specificate, il massimo è 5",
-            "invalid_pump_index": "Indice pompa non valido specificato, gli indici validi sono tra 1 e 5",
-            "unknown": "Errore sconosciuto"
-        },
-        "step": {
-            "user": {
-                "data": {
-                    "climate_system_name": "Mostra il nome del Sistema di Controllo del Clima",
-                    "neasmart_gw_server_host": "Indirizzo del server che esegue l'interfaccia Modbus/REST",
-                    "neasmart_gw_server_port": "Porta REST del server che esegue l'interfaccia Modbus/REST",
-                    "zones": "Elenco separato da virgole delle zone da configurare",
-                    "mixed_groups": "Numero di Gruppi Misti da configurare",
-                    "dehumidificators_regs_mapping": "Elenco separato da virgole degli indirizzi dei registri mappati ai Deumidificatori",
-                    "pumps_regs_mapping": "Elenco separato da virgole degli indirizzi dei registri mappati alle Pompe"
-                }
-            }
+        "data_description": {
+          "api_endpoint": "L'URL completo o host:porta per il server API (es. http://192.168.1.100:8080 o 192.168.1.100:8080)"
         }
+      },
+      "system_name": {
+        "title": "Configurazione Sistema",
+        "description": "Inserisci un nome per il tuo sistema di controllo climatico",
+        "data": {
+          "climate_system_name": "Nome sistema"
+        },
+        "data_description": {
+          "climate_system_name": "Nome visualizzato per il sistema di controllo climatico"
+        }
+      },
+      "zones": {
+        "title": "Configurazione Zone",
+        "description": "Trovate {zones_count} zone. Puoi personalizzare il nome visualizzato per ogni zona qui sotto.",
+        "data_description": {
+          "zone_*": "Nome visualizzato per la zona"
+        }
+      }
     }
+  },
+  "entity": {
+    "climate": {
+      "zone": {
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "normal": "Normale",
+              "reduced": "Ridotto",
+              "standby": "Standby",
+              "scheduled": "Programmato",
+              "party": "Party",
+              "holiday": "Vacanza"
+            }
+          }
+        }
+      }
+    },
+    "select": {
+      "operation_state": {
+        "name": "Stato operativo",
+        "state": {
+          "normal": "Normale",
+          "reduced": "Ridotto",
+          "standby": "Standby",
+          "scheduled": "Programmato",
+          "party": "Party",
+          "holiday": "Vacanza"
+        }
+      }
+    },
+    "sensor": {
+      "temperature": {
+        "name": "Temperatura"
+      },
+      "humidity": {
+        "name": "Umidità"
+      },
+      "setpoint": {
+        "name": "Setpoint"
+      }
+    }
+  }
 }

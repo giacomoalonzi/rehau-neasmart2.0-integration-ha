@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
 from .exceptions import ConnectionError, DataValidationError
 from .http_client import HttpClient, RehauNeasmart2ApiClient
-from .models import ConfigData, DeviceInfo, SystemStatus, PresetState, ClimateMode
+from .models import ConfigData, DeviceInfo, Zone, OperationState, HealthResponse
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,81 +20,70 @@ class RehauNeasmart2ClimateControlSystem:
     def __init__(
         self,
         hass: HomeAssistant,
-        climate_system_name: str,
-        neasmart_gw_server_host: str,
-        neasmart_gw_server_port: int,
-        zones: str,
-        mixed_groups: int = 0,
-        pumps_regs_mapping: str = "",
-        dehumidificators_regs_mapping: str = ""
+        config_data: Dict[str, Any]
     ) -> None:
         """Initialize the climate control system hub."""
         self.hass = hass
         
         # Parse configuration
-        config_dict = {
-            "climate_system_name": climate_system_name,
-            "neasmart_gw_server_host": neasmart_gw_server_host,
-            "neasmart_gw_server_port": neasmart_gw_server_port,
-            "zones": zones,
-            "mixed_groups": mixed_groups,
-            "pumps_regs_mapping": pumps_regs_mapping,
-            "dehumidificators_regs_mapping": dehumidificators_regs_mapping
-        }
-        
         try:
-            self.config = ConfigData.from_dict(config_dict)
+            self.config = ConfigData.from_dict(config_data)
         except ValueError as err:
             _LOGGER.error("Invalid configuration: %s", err)
             raise
         
         # Initialize device info
         self.device_info = DeviceInfo(
-            id=climate_system_name,
-            name=f"{climate_system_name} Climate Control System",
+            id=self.config.climate_system_name,
+            name=f"{self.config.climate_system_name} Climate Control System",
             manufacturer="Rehau",
             model="Neasmart 2.0 Base Station"
         )
         
         # Initialize HTTP client
-        base_url = f"http://{self.config.neasmart_gw_server_host}:{self.config.neasmart_gw_server_port}"
-        self._http_client = HttpClient(base_url)
+        self._http_client = HttpClient(
+            self.config.api_url,
+            self.config.api_port
+        )
         self._api_client = RehauNeasmart2ApiClient(self._http_client)
         
         # Status flags
         self.online = True
-        self._system_status: Optional[SystemStatus] = None
+        self._health_response: Optional[HealthResponse] = None
+        self._operation_state: Optional[OperationState] = None
         
-        # Initialize devices
-        self._init_devices()
-    
-    def _init_devices(self) -> None:
-        """Initialize all devices."""
         # Initialize zones
+        self._init_zones()
+        
+        # Commented out for future implementation
+        # self._init_mixed_groups()
+        # self._init_pumps()
+        # self._init_dehumidifiers()
+    
+    def _init_zones(self) -> None:
+        """Initialize all zones."""
         self.zones: List[RehauNeasmart2Zone] = []
-        for i, zone_name in enumerate(self.config.zones):
-            base_id = (i // 12) + 1
-            zone_id = (i % 12) + 1
-            zone = RehauNeasmart2Zone(self, base_id, zone_id, zone_name)
+        for zone_config in self.config.zones:
+            zone = RehauNeasmart2Zone(
+                self,
+                zone_config["base_id"],
+                zone_config["zone_id"],
+                zone_config["label"]
+            )
             self.zones.append(zone)
-        
-        # Initialize mixed groups
-        self.mixgs: List[RehauNeasmart2MixedGroup] = [
-            RehauNeasmart2MixedGroup(self, mixg_id)
-            for mixg_id in range(1, self.config.mixed_groups + 1)
-        ]
-        
-        # Initialize pumps
-        self.pumps: List[RehauNeasmart2Pump] = [
-            RehauNeasmart2Pump(self, pump_id)
-            for pump_id in self.config.pumps_regs_mapping
-        ]
-        
-        # Initialize dehumidifiers
-        self.dehumidifiers: List[RehauNeasmart2Dehumidifier] = [
-            RehauNeasmart2Dehumidifier(self, dehum_id)
-            for dehum_id in self.config.dehumidificators_regs_mapping
-        ]
+    
+    # Commented out for future implementation
+    # def _init_mixed_groups(self) -> None:
+    #     """Initialize mixed groups when API support is available."""
+    #     pass
+    
+    # def _init_pumps(self) -> None:
+    #     """Initialize pumps when API support is available."""
+    #     pass
+    
+    # def _init_dehumidifiers(self) -> None:
+    #     """Initialize dehumidifiers when API support is available."""
+    #     pass
     
     @property
     def id(self) -> str:
@@ -130,9 +119,11 @@ class RehauNeasmart2ClimateControlSystem:
         await self._http_client.close()
     
     async def test_connection(self) -> bool:
-        """Test connection to the shim server."""
+        """Test connection to the API server."""
         try:
-            self.online = await self._http_client.health_check()
+            health = await self._api_client.health_check()
+            self.online = health.status != "unhealthy"
+            self._health_response = health
             return self.online
         except ConnectionError:
             self.online = False
@@ -141,78 +132,39 @@ class RehauNeasmart2ClimateControlSystem:
     async def update_system_status(self) -> None:
         """Update system status."""
         try:
-            # Get all system data in parallel
-            outside_temp = await self.get_outside_temperature()
-            filtered_temp = await self.get_filtered_outside_temperature()
-            notifications = await self._api_client.get_notifications()
-            global_state = await self.get_global_state()
-            global_mode = await self.get_global_mode()
+            # Get health status
+            self._health_response = await self._api_client.health_check()
             
-            self._system_status = SystemStatus(
-                outside_temperature=outside_temp,
-                filtered_outside_temperature=filtered_temp,
-                hints_present=notifications["hints"],
-                warnings_present=notifications["warnings"],
-                errors_present=notifications["errors"],
-                global_state=PresetState(global_state),
-                global_mode=ClimateMode(global_mode)
-            )
+            # Get global operation state
+            self._operation_state = await self._api_client.get_operation_state()
+            
             self.online = True
         except (ConnectionError, DataValidationError) as err:
             _LOGGER.error("Failed to update system status: %s", err)
             self.online = False
     
-    # Temperature methods
-    async def get_outside_temperature(self) -> float:
-        """Get outside temperature."""
-        return await self._api_client.get_outside_temperature()
+    # Global operation state methods
+    async def get_operation_state(self) -> OperationState:
+        """Get global operation state."""
+        return await self._api_client.get_operation_state()
     
-    async def get_filtered_outside_temperature(self) -> float:
-        """Get filtered outside temperature."""
-        return await self._api_client.get_filtered_outside_temperature()
-    
-    # Notification methods
-    async def get_notification_hints(self) -> bool:
-        """Get notification hints status."""
-        notifications = await self._api_client.get_notifications()
-        return notifications["hints"]
-    
-    async def get_notification_warnings(self) -> bool:
-        """Get notification warnings status."""
-        notifications = await self._api_client.get_notifications()
-        return notifications["warnings"]
-    
-    async def get_notification_errors(self) -> bool:
-        """Get notification errors status."""
-        notifications = await self._api_client.get_notifications()
-        return notifications["errors"]
-    
-    # Global state/mode methods
-    async def get_global_state(self) -> int:
-        """Get global state."""
-        return await self._api_client.get_global_state()
-    
-    async def set_global_state(self, state: int) -> bool:
-        """Set global state."""
+    async def set_operation_state(self, state: OperationState) -> bool:
+        """Set global operation state."""
         try:
-            await self._api_client.set_global_state(state)
+            await self._api_client.set_operation_state(state)
+            self._operation_state = state
             return True
         except Exception as err:
-            _LOGGER.error("Failed to set global state: %s", err)
+            _LOGGER.error("Failed to set operation state: %s", err)
             return False
     
-    async def get_global_mode(self) -> int:
-        """Get global mode."""
-        return await self._api_client.get_global_mode()
-    
-    async def set_global_mode(self, mode: int) -> bool:
-        """Set global mode."""
+    async def get_all_zones(self) -> List[Zone]:
+        """Get all zones data from API."""
         try:
-            await self._api_client.set_global_mode(mode)
-            return True
+            return await self._api_client.get_zones()
         except Exception as err:
-            _LOGGER.error("Failed to set global mode: %s", err)
-            return False
+            _LOGGER.error("Failed to get all zones: %s", err)
+            return []
 
 
 class RehauNeasmart2Zone:
@@ -236,6 +188,9 @@ class RehauNeasmart2Zone:
             manufacturer="Rehau",
             model="Neasmart 2.0 Room Thermostat"
         )
+        
+        # Cache for zone data
+        self._zone_data: Optional[Zone] = None
     
     @property
     def id(self) -> str:
@@ -257,10 +212,11 @@ class RehauNeasmart2Zone:
         """Return model."""
         return self.device_info.model
     
-    async def get_zone_data(self) -> dict | None:
+    async def get_zone_data(self) -> Zone | None:
         """Get zone data."""
         try:
-            return await self.hub._api_client.get_zone_data(self.base_id, self.zone_id)
+            self._zone_data = await self.hub._api_client.get_zone(self.base_id, self.zone_id)
+            return self._zone_data
         except Exception as err:
             _LOGGER.error("Failed to get zone data for %s: %s", self.id, err)
             return None
@@ -268,177 +224,53 @@ class RehauNeasmart2Zone:
     async def set_zone_setpoint(self, setpoint: float) -> bool:
         """Set zone setpoint temperature."""
         try:
-            await self.hub._api_client.set_zone_setpoint(self.base_id, self.zone_id, setpoint)
+            await self.hub._api_client.update_zone(
+                self.base_id,
+                self.zone_id,
+                setpoint=setpoint
+            )
             return True
         except Exception as err:
             _LOGGER.error("Failed to set zone setpoint for %s: %s", self.id, err)
             return False
     
-    async def set_zone_state(self, state: int) -> bool:
+    async def set_zone_state(self, state: OperationState) -> bool:
         """Set zone state."""
         try:
-            await self.hub._api_client.set_zone_state(self.base_id, self.zone_id, state)
+            await self.hub._api_client.update_zone(
+                self.base_id,
+                self.zone_id,
+                state=state
+            )
             return True
         except Exception as err:
             _LOGGER.error("Failed to set zone state for %s: %s", self.id, err)
             return False
-
-
-class RehauNeasmart2MixedGroup:
-    """Rehau Neasmart 2.0 Mixed Group."""
-
-    def __init__(self, hub: RehauNeasmart2ClimateControlSystem, mixg_id: int) -> None:
-        """Initialize mixed group."""
-        self.hub = hub
-        self.mixg_id = mixg_id
-        
-        self.device_info = DeviceInfo(
-            id=f"{hub.id}_{mixg_id}",
-            name=f"Mixed Group #{mixg_id}",
-            manufacturer="Rehau",
-            model="Mixed Group w/ 24/230 Pump and 0-10v controlled mixing valve"
-        )
     
-    @property
-    def id(self) -> str:
-        """Return unique ID."""
-        return self.device_info.id
-    
-    @property
-    def name(self) -> str:
-        """Return name."""
-        return self.device_info.name
-    
-    @property
-    def manufacturer(self) -> str:
-        """Return manufacturer."""
-        return self.device_info.manufacturer
-    
-    @property
-    def model(self) -> str:
-        """Return model."""
-        return self.device_info.model
-    
-    async def get_flow_temperature(self) -> float | None:
-        """Get flow temperature."""
+    async def update_zone(self, state: Optional[OperationState] = None, setpoint: Optional[float] = None) -> bool:
+        """Update zone state and/or setpoint."""
         try:
-            data = await self.hub._api_client.get_mixed_group_data(self.mixg_id)
-            return data.get("flow_temperature")
+            await self.hub._api_client.update_zone(
+                self.base_id,
+                self.zone_id,
+                state=state,
+                setpoint=setpoint
+            )
+            return True
         except Exception as err:
-            _LOGGER.error("Failed to get flow temperature for %s: %s", self.id, err)
-            return None
-    
-    async def get_return_temperature(self) -> float | None:
-        """Get return temperature."""
-        try:
-            data = await self.hub._api_client.get_mixed_group_data(self.mixg_id)
-            return data.get("return_temperature")
-        except Exception as err:
-            _LOGGER.error("Failed to get return temperature for %s: %s", self.id, err)
-            return None
-    
-    async def get_valve_opening_percentage(self) -> int | None:
-        """Get valve opening percentage."""
-        try:
-            data = await self.hub._api_client.get_mixed_group_data(self.mixg_id)
-            return data.get("mixing_valve_opening_percentage")
-        except Exception as err:
-            _LOGGER.error("Failed to get valve opening for %s: %s", self.id, err)
-            return None
-    
-    async def get_pump_state(self) -> int | None:
-        """Get pump state."""
-        try:
-            data = await self.hub._api_client.get_mixed_group_data(self.mixg_id)
-            return data.get("pump_state")
-        except Exception as err:
-            _LOGGER.error("Failed to get pump state for %s: %s", self.id, err)
-            return None
+            _LOGGER.error("Failed to update zone %s: %s", self.id, err)
+            return False
 
 
-class RehauNeasmart2Dehumidifier:
-    """Rehau Neasmart 2.0 Dehumidifier."""
-
-    def __init__(self, hub: RehauNeasmart2ClimateControlSystem, dehumidifier_id: int) -> None:
-        """Initialize dehumidifier."""
-        self.hub = hub
-        self.dehumidifier_id = dehumidifier_id
-        
-        self.device_info = DeviceInfo(
-            id=f"{hub.id}_{dehumidifier_id}",
-            name=f"Dehumidifier #{dehumidifier_id}",
-            manufacturer="Rehau",
-            model="Dehumidifier with optional hydronic battery"
-        )
-    
-    @property
-    def id(self) -> str:
-        """Return unique ID."""
-        return self.device_info.id
-    
-    @property
-    def name(self) -> str:
-        """Return name."""
-        return self.device_info.name
-    
-    @property
-    def manufacturer(self) -> str:
-        """Return manufacturer."""
-        return self.device_info.manufacturer
-    
-    @property
-    def model(self) -> str:
-        """Return model."""
-        return self.device_info.model
-    
-    async def get_dehumidifier_state(self) -> int | None:
-        """Get dehumidifier state."""
-        try:
-            return await self.hub._api_client.get_dehumidifier_state(self.dehumidifier_id)
-        except Exception as err:
-            _LOGGER.error("Failed to get dehumidifier state for %s: %s", self.id, err)
-            return None
-
-
-class RehauNeasmart2Pump:
-    """Rehau Neasmart 2.0 Extra Pump."""
-
-    def __init__(self, hub: RehauNeasmart2ClimateControlSystem, pump_id: int) -> None:
-        """Initialize pump."""
-        self.hub = hub
-        self.pump_id = pump_id
-        
-        self.device_info = DeviceInfo(
-            id=f"{hub.id}_{pump_id}",
-            name=f"Extra Pump #{pump_id}",
-            manufacturer="Rehau",
-            model="On-Off 24/230v Pump"
-        )
-    
-    @property
-    def id(self) -> str:
-        """Return unique ID."""
-        return self.device_info.id
-    
-    @property
-    def name(self) -> str:
-        """Return name."""
-        return self.device_info.name
-    
-    @property
-    def manufacturer(self) -> str:
-        """Return manufacturer."""
-        return self.device_info.manufacturer
-    
-    @property
-    def model(self) -> str:
-        """Return model."""
-        return self.device_info.model
-    
-    async def get_pump_state(self) -> int | None:
-        """Get pump state."""
-        try:
-            return await self.hub._api_client.get_pump_state(self.pump_id)
-        except Exception as err:
-            _LOGGER.error("Failed to get pump state for %s: %s", self.id, err)
-            return None
+# Commented out for future implementation when API support is available
+# class RehauNeasmart2MixedGroup:
+#     """Rehau Neasmart 2.0 Mixed Group."""
+#     pass
+#
+# class RehauNeasmart2Dehumidifier:
+#     """Rehau Neasmart 2.0 Dehumidifier."""
+#     pass
+#
+# class RehauNeasmart2Pump:
+#     """Rehau Neasmart 2.0 Extra Pump."""
+#     pass

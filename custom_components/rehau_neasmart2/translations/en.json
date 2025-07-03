@@ -1,30 +1,85 @@
 {
-    "config": {
-        "abort": {
-            "already_configured": "Device is already configured"
+  "config": {
+    "abort": {
+      "already_configured": "Device is already configured"
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to API server",
+      "no_zones_found": "No zones found on the API server",
+      "invalid_config": "Invalid configuration",
+      "invalid_endpoint": "Invalid endpoint format. It should be host:port or a full URL.",
+      "unknown": "Unknown error"
+    },
+    "step": {
+      "user": {
+        "title": "API Connection",
+        "description": "Enter the connection details for the Rehau Neasmart 2.0 API server",
+        "data": {
+          "api_endpoint": "API Endpoint"
         },
-        "error": {
-            "cannot_connect": "Cannot connect to Modbus/Rest shim server",
-            "too_many_zones": "Too many zones specified, maximum is 48",
-            "too_many_mixg": "Too many mixed groups specified, maximum is 3",
-            "too_many_dehumidificators": "Too many dehumidificators specified, maximum is 9",
-            "invalid_dehumidificator_index": "Invalid dehumidificator index specified, valid indexes are between 1 and 9",
-            "too_many_extra_pump": "Too many pumps specified, maximum is 5",
-            "invalid_pump_index": "Invalid pump index specified, valid indexes are between 1 and 5",
-            "unknown": "Unknown error"
-        },
-        "step": {
-            "user": {
-                "data": {
-                    "climate_system_name": "Show name of the Climate Control System",
-                    "neasmart_gw_server_host": "Address of the server running the Modbus/REST interface",
-                    "neasmart_gw_server_port": "REST port of the server running the Modbus/REST interface",
-                    "zones": "Comma separated list of the zones to configure",
-                    "mixed_groups": "Number of Mixed Groups to configure",
-                    "dehumidificators_regs_mapping": "Comma separated list of registers addresses mapping to Dehumidificators",
-                    "pumps_regs_mapping": "Comma separated list of registers addresses mapping to Pumps"
-                }
-            }
+        "data_description": {
+          "api_endpoint": "The full URL or host:port for the API server (e.g., http://192.168.1.100:8080 or 192.168.1.100:8080)"
         }
+      },
+      "system_name": {
+        "title": "System Configuration",
+        "description": "Enter a name for your climate control system",
+        "data": {
+          "climate_system_name": "System name"
+        },
+        "data_description": {
+          "climate_system_name": "Display name for the climate control system"
+        }
+      },
+      "zones": {
+        "title": "Zone Configuration",
+        "description": "Found {zones_count} zones. You can customize the display name for each zone below.",
+        "data_description": {
+          "zone_*": "Display name for the zone"
+        }
+      }
     }
+  },
+  "entity": {
+    "climate": {
+      "zone": {
+        "state_attributes": {
+          "preset_mode": {
+            "state": {
+              "normal": "Normal",
+              "reduced": "Reduced",
+              "standby": "Standby",
+              "scheduled": "Scheduled",
+              "party": "Party",
+              "holiday": "Holiday"
+            }
+          }
+        }
+      }
+    },
+    "select": {
+      "operation_state": {
+        "name": "Operation state",
+        "state": {
+          "normal": "Normal",
+          "reduced": "Reduced",
+          "standby": "Standby",
+          "scheduled": "Scheduled",
+          "party": "Party",
+          "holiday": "Holiday"
+        }
+      }
+    },
+    "sensor": {
+      "temperature": {
+        "name": "Temperature"
+      },
+      "humidity": {
+        "name": "Humidity"
+      },
+      "setpoint": {
+        "name": "Setpoint"
+      }
+    }
+  }
 }

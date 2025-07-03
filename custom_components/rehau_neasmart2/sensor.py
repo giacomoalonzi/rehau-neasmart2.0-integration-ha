@@ -1,60 +1,75 @@
-"""Platform for sensor integration."""
+"""Sensor platform for Rehau Neasmart 2.0 integration."""
+from __future__ import annotations
 
 import logging
+from typing import Any, List, Optional
+
 from homeassistant.components.sensor import SensorEntity, SensorDeviceClass
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import PERCENTAGE, UnitOfTemperature
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from homeassistant.const import (
-    TEMPERATURE,
-    UnitOfTemperature,
-    PERCENTAGE,
-)
-from .const import DOMAIN, PRESENCE_STATES, BINARY_STATUSES
+from .const import DOMAIN
+from .models import Zone
 
 _LOGGER = logging.getLogger(__name__)
 
 
-async def async_setup_entry(hass, config_entry, async_add_entities):
-    """Add sensors for passed config_entry in HA."""
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up sensor entities from a config entry."""
     hub = hass.data[DOMAIN][config_entry.entry_id]
-    devices = [
-        RehauNeasmart2OutsideTemperatureSensor(hub),
-        RehauNeasmart2FilteredOutsideTemperatureSensor(hub),
-        RehauNeasmart2ErrorsPresentSensor(hub),
-        RehauNeasmart2WarningsPresentSensor(hub),
-        RehauNeasmart2HintsPresentSensor(hub)
-    ]
-
-    for mixg in hub.mixgs:
-        devices.append(RehauNeasmart2MixedGroupFlowTemperatureSensor(mixg))
-        devices.append(RehauNeasmart2MixedGroupReturnTemperatureSensor(mixg))
-        devices.append(RehauNeasmart2MixedGroupValveOpeningSensor(mixg))
-        devices.append(RehauNeasmart2MixedGroupPumpStateSensor(mixg))
-
-    for extra_pump in hub.pumps:
-        devices.append(RehauNeasmart2ExtraPumpStateSensor(extra_pump))
-
-    for dehumidifier in hub.dehumidifiers:
-        devices.append(RehauNeasmart2DehumidifierStateSensor(dehumidifier))
-
+    
+    entities: List[SensorEntity] = []
+    
+    # Add zone sensors
     for zone in hub.zones:
-        devices.append(RehauNeasmart2ZoneHumidity(zone))
-        devices.append(RehauNeasmart2ZoneTemperature(zone))
-
-    if devices:
-        async_add_entities(devices)
+        entities.extend([
+            RehauNeasmart2ZoneTemperatureSensor(zone),
+            RehauNeasmart2ZoneHumiditySensor(zone),
+            RehauNeasmart2ZoneSetpointSensor(zone),
+        ])
+    
+    # Add system sensors
+    entities.extend([
+        RehauNeasmart2SystemHealthSensor(hub),
+        RehauNeasmart2SystemVersionSensor(hub),
+    ])
+    
+    # Future implementation - commented out
+    # for mixg in hub.mixgs:
+    #     entities.extend([
+    #         RehauNeasmart2MixedGroupFlowTemperatureSensor(mixg),
+    #         RehauNeasmart2MixedGroupReturnTemperatureSensor(mixg),
+    #         RehauNeasmart2MixedGroupValveOpeningSensor(mixg),
+    #         RehauNeasmart2MixedGroupPumpStateSensor(mixg),
+    #     ])
+    
+    if entities:
+        async_add_entities(entities)
 
 
 class RehauNeasmart2GenericSensor(SensorEntity, RestoreEntity):
+    """Base class for Rehau Neasmart2 sensor entities."""
+    
     _attr_has_entity_name = False
 
-    def __init__(self, device):
+    def __init__(self, device) -> None:
+        """Initialize the sensor."""
         self._device = device
-        self._state = None
+        self._available = True
+        self._update_error_count = 0
+        self._max_errors = 3
 
     @property
-    def device_info(self):
+    def device_info(self) -> DeviceInfo:
+        """Return device information."""
         return DeviceInfo(
             identifiers={(DOMAIN, self._device.id)},
             name=self._device.name,
@@ -64,231 +79,198 @@ class RehauNeasmart2GenericSensor(SensorEntity, RestoreEntity):
 
     @property
     def available(self) -> bool:
-        return self._device.hub.online
+        """Return if entity is available."""
+        return self._device.hub.online and self._available
+
+    def _handle_update_error(self, error: Exception) -> None:
+        """Handle update errors with retry logic."""
+        self._update_error_count += 1
+        if self._update_error_count >= self._max_errors:
+            self._available = False
+            _LOGGER.error(
+                "Too many errors for %s, marking as unavailable: %s",
+                self._attr_unique_id,
+                error
+            )
+        else:
+            _LOGGER.warning(
+                "Error updating %s (attempt %d/%d): %s",
+                self._attr_unique_id,
+                self._update_error_count,
+                self._max_errors,
+                error
+            )
+
+    def _reset_error_count(self) -> None:
+        """Reset error count on successful update."""
+        if self._update_error_count > 0:
+            self._update_error_count = 0
+            self._available = True
+
+
+class RehauNeasmart2ZoneTemperatureSensor(RehauNeasmart2GenericSensor):
+    """Zone temperature sensor."""
+    
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_suggested_display_precision = 1
+
+    def __init__(self, device) -> None:
+        """Initialize the sensor."""
+        super().__init__(device)
+        self._attr_unique_id = f"{self._device.id}_zone_temperature"
+        self._attr_name = f"{self._device.name} Temperature"
+        self._zone_data: Optional[Zone] = None
+
+    async def async_update(self) -> None:
+        """Update the sensor."""
+        try:
+            zone_data = await self._device.get_zone_data()
+            if zone_data is not None:
+                self._zone_data = zone_data
+                self._attr_native_value = zone_data.temperature.value
+                self._reset_error_count()
+            else:
+                raise ValueError("No zone data received")
+        except Exception as err:
+            self._handle_update_error(err)
 
     @property
-    def native_value(self) -> float | None:
-        return self._state
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return extra state attributes."""
+        attrs = {}
+        if self._zone_data and self._zone_data.temperature:
+            attrs["unit"] = self._zone_data.temperature.unit.value
+        return attrs
 
 
-class RehauNeasmart2OutsideTemperatureSensor(RehauNeasmart2GenericSensor):
-    device_class = TEMPERATURE
-    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
-
-    def __init__(self, device):
-        super().__init__(device)
-        self._attr_unique_id = f"{self._device.id}_outside_temperature"
-        self._attr_name = f"{self._device.name} Outside Temperature"
-
-    async def async_update(self) -> None:
-        outside_temperature = await self._device.get_outside_temperature()
-        if outside_temperature is not None:
-            self._state = outside_temperature
-        else:
-            _LOGGER.error(f"Error updating {self._device.id}_outside_temperature")
-
-
-class RehauNeasmart2FilteredOutsideTemperatureSensor(RehauNeasmart2GenericSensor):
-    device_class = TEMPERATURE
-    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
-
-    def __init__(self, device):
-        super().__init__(device)
-        self._attr_unique_id = f"{self._device.id}_filtered_outside_temperature"
-        self._attr_name = f"{self._device.name} Filtered Outside Temperature"
-
-    async def async_update(self) -> None:
-        filtered_outside_temperature = await self._device.get_filtered_outside_temperature()
-        if filtered_outside_temperature is not None:
-            self._state = filtered_outside_temperature
-        else:
-            _LOGGER.error(f"Error updating {self._device.id}_filtered_outside_temperature")
-
-
-class RehauNeasmart2ErrorsPresentSensor(RehauNeasmart2GenericSensor):
-    device_class = "enum"
-    _attr_options = list(PRESENCE_STATES.values())
-    _state = PRESENCE_STATES[False]
-
-    def __init__(self, device):
-        super().__init__(device)
-        self._attr_unique_id = f"{self._device.id}_errors_presence"
-        self._attr_name = f"{self._device.name} Errors"
-
-    async def async_update(self) -> None:
-        errors_present = await self._device.get_notification_errors()
-        if errors_present is not None:
-            self._state = PRESENCE_STATES[errors_present]
-        else:
-            _LOGGER.error(f"Error updating {self._device.id}_errors_presence")
-
-
-class RehauNeasmart2WarningsPresentSensor(RehauNeasmart2GenericSensor):
-    device_class = "enum"
-    _attr_options = list(PRESENCE_STATES.values())
-    _state = PRESENCE_STATES[False]
-
-    def __init__(self, device):
-        super().__init__(device)
-        self._attr_unique_id = f"{self._device.id}_warnings_presence"
-        self._attr_name = f"{self._device.name} Warnings"
-
-    async def async_update(self) -> None:
-        warnings_present = await self._device.get_notification_warnings()
-        if warnings_present is not None:
-            self._state = PRESENCE_STATES[warnings_present]
-        else:
-            _LOGGER.error(f"Error updating {self._device.id}_warnings_presence")
-
-
-class RehauNeasmart2HintsPresentSensor(RehauNeasmart2GenericSensor):
-    device_class = "enum"
-    _attr_options = list(PRESENCE_STATES.values())
-    _state = PRESENCE_STATES[False]
-
-    def __init__(self, device):
-        super().__init__(device)
-        self._attr_unique_id = f"{self._device.id}_hints_presence"
-        self._attr_name = f"{self._device.name} Hints"
-
-    async def async_update(self) -> None:
-        hints_present = await self._device.get_notification_hints()
-        if hints_present is not None:
-            self._state = PRESENCE_STATES[hints_present]
-        else:
-            _LOGGER.error(f"Error updating {self._device.id}_hints_presence")
-
-
-class RehauNeasmart2MixedGroupFlowTemperatureSensor(RehauNeasmart2GenericSensor):
-    device_class = TEMPERATURE
-    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
-
-    def __init__(self, device):
-        super().__init__(device)
-        self._attr_unique_id = f"{self._device.id}_mixedgroup_flow_temperature"
-        self._attr_name = f"{self._device.name} Flow Temperature"
-
-    async def async_update(self) -> None:
-        flow_temperature = await self._device.get_flow_temperature()
-        if flow_temperature is not None:
-            self._state = flow_temperature
-        else:
-            _LOGGER.error(f"Error updating {self._device.id}_mixedgroup_flow_temperature")
-
-
-class RehauNeasmart2MixedGroupReturnTemperatureSensor(RehauNeasmart2GenericSensor):
-    device_class = TEMPERATURE
-    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
-
-    def __init__(self, device):
-        super().__init__(device)
-        self._attr_unique_id = f"{self._device.id}_mixedgroup_return_temperature"
-        self._attr_name = f"{self._device.name} Return Temperature"
-
-    async def async_update(self) -> None:
-        return_temperature = await self._device.get_return_temperature()
-        if return_temperature is not None:
-            self._state = return_temperature
-        else:
-            _LOGGER.error(f"Error updating {self._device.id}_mixedgroup_return_temperature")
-
-
-class RehauNeasmart2MixedGroupValveOpeningSensor(RehauNeasmart2GenericSensor):
+class RehauNeasmart2ZoneHumiditySensor(RehauNeasmart2GenericSensor):
+    """Zone humidity sensor."""
+    
+    _attr_device_class = SensorDeviceClass.HUMIDITY
     _attr_native_unit_of_measurement = PERCENTAGE
 
-    def __init__(self, device):
-        super().__init__(device)
-        self._attr_unique_id = f"{self._device.id}_valve_opening"
-        self._attr_name = f"{self._device.name} Valve Opening"
-
-    async def async_update(self) -> None:
-        valve_opening = await self._device.get_valve_opening_percentage()
-        if valve_opening is not None:
-            self._state = valve_opening
-        else:
-            _LOGGER.error(f"Error updating {self._device.id}_valve_opening")
-
-
-class RehauNeasmart2MixedGroupPumpStateSensor(RehauNeasmart2GenericSensor):
-    device_class = "enum"
-    _attr_options = list(BINARY_STATUSES.values())
-    _state = BINARY_STATUSES[0]
-
-    def __init__(self, device):
-        super().__init__(device)
-        self._attr_unique_id = f"{self._device.id}_mixedgroup_pump_state"
-        self._attr_name = f"{self._device.name} Pump State"
-
-    async def async_update(self) -> None:
-        pump_status = await self._device.get_pump_state()
-        if pump_status is not None:
-            self._state = BINARY_STATUSES[pump_status]
-        else:
-            _LOGGER.error(f"Error updating {self._device.id}_mixedgroup_pump_state")
-
-
-class RehauNeasmart2ExtraPumpStateSensor(RehauNeasmart2GenericSensor):
-    device_class = "enum"
-    _attr_options = list(BINARY_STATUSES.values())
-    _state = BINARY_STATUSES[0]
-
-    def __init__(self, device):
-        super().__init__(device)
-        self._attr_unique_id = f"{self._device.id}_extra_pump_state"
-        self._attr_name = f"{self._device.name} Pump State"
-
-    async def async_update(self) -> None:
-        pump_status = await self._device.get_pump_state()
-        if pump_status is not None:
-            self._state = BINARY_STATUSES[pump_status]
-        else:
-            _LOGGER.error(f"Error updating {self._device.id}_extra_pump_state")
-
-
-class RehauNeasmart2DehumidifierStateSensor(RehauNeasmart2GenericSensor):
-
-    def __init__(self, device):
-        super().__init__(device)
-        self._attr_unique_id = f"{self._device.id}_dehumidifier_state"
-        self._attr_name = f"{self._device.name} Dehumidifiers State"
-
-    async def async_update(self) -> None:
-        dehumidifier_status = await self._device.get_dehumidifier_state()
-        if dehumidifier_status is not None:
-            self._state = dehumidifier_status
-        else:
-            _LOGGER.error(f"Error updating {self._device.id}_dehumidifier_state")
-
-
-class RehauNeasmart2ZoneHumidity(RehauNeasmart2GenericSensor):
-
-    device_class = SensorDeviceClass.HUMIDITY
-    _attr_native_unit_of_measurement = PERCENTAGE
-
-    def __init__(self, device):
+    def __init__(self, device) -> None:
+        """Initialize the sensor."""
         super().__init__(device)
         self._attr_unique_id = f"{self._device.id}_zone_humidity"
         self._attr_name = f"{self._device.name} Humidity"
 
     async def async_update(self) -> None:
-        zone_data = await self._device.get_zone_data()
-        if zone_data is not None and zone_data.get("relative_humidity") is not None:
-            self._state = zone_data["relative_humidity"]
-        else:
-            _LOGGER.error(f"Error updating {self._attr_unique_id} thermostat")
+        """Update the sensor."""
+        try:
+            zone_data = await self._device.get_zone_data()
+            if zone_data is not None:
+                self._attr_native_value = zone_data.relative_humidity
+                self._reset_error_count()
+            else:
+                raise ValueError("No zone data received")
+        except Exception as err:
+            self._handle_update_error(err)
 
-class RehauNeasmart2ZoneTemperature(RehauNeasmart2GenericSensor):
-    device_class = TEMPERATURE
+
+class RehauNeasmart2ZoneSetpointSensor(RehauNeasmart2GenericSensor):
+    """Zone setpoint temperature sensor."""
+    
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_suggested_display_precision = 1
 
-    def __init__(self, device):
+    def __init__(self, device) -> None:
+        """Initialize the sensor."""
         super().__init__(device)
-        self._attr_unique_id = f"{self._device.id}_zone_temperature"
-        self._attr_name = f"{self._device.name} Temperature"
+        self._attr_unique_id = f"{self._device.id}_zone_setpoint"
+        self._attr_name = f"{self._device.name} Setpoint"
+        self._zone_data: Optional[Zone] = None
 
     async def async_update(self) -> None:
-        zone_data = await self._device.get_zone_data()
-        if zone_data is not None and zone_data.get("temperature") is not None:
-            self._state = zone_data["temperature"]
-        else:
-            _LOGGER.error(f"Error updating {self._attr_unique_id} thermostat")
+        """Update the sensor."""
+        try:
+            zone_data = await self._device.get_zone_data()
+            if zone_data is not None:
+                self._zone_data = zone_data
+                if zone_data.setpoint:
+                    self._attr_native_value = zone_data.setpoint.value
+                else:
+                    self._attr_native_value = None
+                self._reset_error_count()
+            else:
+                raise ValueError("No zone data received")
+        except Exception as err:
+            self._handle_update_error(err)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return extra state attributes."""
+        attrs = {}
+        if self._zone_data and self._zone_data.setpoint:
+            attrs["unit"] = self._zone_data.setpoint.unit.value
+        return attrs
+
+
+class RehauNeasmart2SystemHealthSensor(RehauNeasmart2GenericSensor):
+    """System health sensor."""
+    
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["healthy", "degraded", "unhealthy"]
+
+    def __init__(self, device) -> None:
+        """Initialize the sensor."""
+        super().__init__(device)
+        self._attr_unique_id = f"{self._device.id}_system_health"
+        self._attr_name = f"{self._device.name} System Health"
+
+    async def async_update(self) -> None:
+        """Update the sensor."""
+        try:
+            if self._device._health_response:
+                self._attr_native_value = self._device._health_response.status.value
+                self._reset_error_count()
+            else:
+                # Trigger a health check update
+                await self._device.update_system_status()
+                if self._device._health_response:
+                    self._attr_native_value = self._device._health_response.status.value
+                else:
+                    raise ValueError("No health data received")
+        except Exception as err:
+            self._handle_update_error(err)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return extra state attributes."""
+        attrs = {}
+        if self._device._health_response:
+            health = self._device._health_response
+            attrs["database_healthy"] = health.database.get("healthy", False)
+            attrs["modbus_healthy"] = health.modbus.get("healthy", False)
+            if health.modbus.get("circuit_breaker"):
+                attrs["circuit_breaker_state"] = health.modbus["circuit_breaker"].get("state")
+                attrs["circuit_breaker_failures"] = health.modbus["circuit_breaker"].get("failures")
+        return attrs
+
+
+class RehauNeasmart2SystemVersionSensor(RehauNeasmart2GenericSensor):
+    """System version sensor."""
+    
+    def __init__(self, device) -> None:
+        """Initialize the sensor."""
+        super().__init__(device)
+        self._attr_unique_id = f"{self._device.id}_system_version"
+        self._attr_name = f"{self._device.name} API Version"
+
+    async def async_update(self) -> None:
+        """Update the sensor."""
+        try:
+            if self._device._health_response:
+                self._attr_native_value = self._device._health_response.version
+                self._reset_error_count()
+            else:
+                # Trigger a health check update
+                await self._device.update_system_status()
+                if self._device._health_response:
+                    self._attr_native_value = self._device._health_response.version
+                else:
+                    raise ValueError("No health data received")
+        except Exception as err:
+            self._handle_update_error(err)

@@ -1,50 +1,35 @@
 """Constants for the Rehau Neasmart 2.0 integration."""
 from __future__ import annotations
 
-from typing import Dict
-
-from .models import PresetState, ClimateMode, BinaryStatus
-
 DOMAIN = "rehau_neasmart2"
 
 # Configuration constants
-MAX_ZONES = 48
-MAX_MIXED_GROUPS = 3
-MAX_DEHUMIDIFIERS = 9
-MAX_EXTRA_PUMPS = 5
+MAX_ZONES = 48  # Maximum 4 bases * 12 zones per base
+MAX_BASE_STATIONS = 4
+MAX_ZONES_PER_BASE = 12
 
-# Value mappings
-BINARY_STATUSES: Dict[int, str] = {
-    BinaryStatus.OFF: "Off",
-    BinaryStatus.ON: "On"
-}
+# Future implementation constants (commented out)
+# MAX_MIXED_GROUPS = 3
+# MAX_DEHUMIDIFIERS = 9
+# MAX_EXTRA_PUMPS = 5
 
-PRESENCE_STATES: Dict[bool, str] = {
-    True: "Present",
-    False: "Not Present"
-}
+# Update intervals (in seconds)
+DEFAULT_SCAN_INTERVAL = 30
+FAST_SCAN_INTERVAL = 10
+SLOW_SCAN_INTERVAL = 60
 
-PRESET_STATES_MAPPING: Dict[str, PresetState] = {
-    "Normal": PresetState.NORMAL,
-    "Reduced": PresetState.REDUCED,
-    "Standby": PresetState.STANDBY,
-    "Time Program": PresetState.TIME_PROGRAM,
-    "Party": PresetState.PARTY,
-    "Absence": PresetState.ABSENCE
-}
+# Cache expiration times (in seconds)
+CACHE_EXPIRATION_SHORT = 10
+CACHE_EXPIRATION_MEDIUM = 30
+CACHE_EXPIRATION_LONG = 300
 
-PRESET_STATES_MAPPING_REVERSE: Dict[PresetState, str] = {
-    v: k for k, v in PRESET_STATES_MAPPING.items()
-}
+# Temperature limits
+MIN_TEMPERATURE = 5.0
+MAX_TEMPERATURE = 30.0
+TEMPERATURE_STEP = 0.5
 
-PRESET_CLIMATE_MODES_MAPPING: Dict[str, ClimateMode] = {
-    "Auto": ClimateMode.AUTO,
-    "Heating": ClimateMode.HEATING,
-    "Cooling": ClimateMode.COOLING,
-    "Forced Heating": ClimateMode.FORCED_HEATING,
-    "Forced Cooling": ClimateMode.FORCED_COOLING
-}
+# API version
+API_VERSION = "2.1.0"
 
-PRESET_CLIMATE_MODES_MAPPING_REVERSE: Dict[ClimateMode, str] = {
-    v: k for k, v in PRESET_CLIMATE_MODES_MAPPING.items()
-}
+# Integration version
+INTEGRATION_VERSION = "2.0.0"
