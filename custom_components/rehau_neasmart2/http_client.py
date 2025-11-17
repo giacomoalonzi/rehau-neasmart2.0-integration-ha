@@ -9,7 +9,9 @@ from urllib.parse import urljoin
 import aiohttp
 from aiohttp import ClientError, ClientTimeout
 
-from .exceptions import ConnectionError, CommandFailedError, DataValidationError
+from .exceptions import (
+    ConnectionError, CommandFailedError, DataValidationError, RehauNeasmart2Error
+)
 from .cache import DataCache
 from .models import (
     Zone, ZonesListResponse, OperationState, OperationStateResponse,
@@ -126,6 +128,7 @@ class HttpClient:
                         return {"status": response.status}
                         
             except ClientError as err:
+                # Network/connection errors - retry
                 _LOGGER.warning(
                     "Request failed (attempt %d/%d) to %s: %s",
                     attempt + 1, MAX_RETRIES, url, err
@@ -137,7 +140,26 @@ class HttpClient:
                     raise ConnectionError(
                         f"Failed to connect to {url} after {MAX_RETRIES} attempts"
                     ) from err
+            except ConnectionError as err:
+                # Transient errors (e.g., 503) - retry
+                _LOGGER.warning(
+                    "Connection error (attempt %d/%d) to %s: %s",
+                    attempt + 1, MAX_RETRIES, url, err
+                )
+                
+                if attempt < MAX_RETRIES - 1:
+                    await asyncio.sleep(RETRY_DELAY * (attempt + 1))
+                else:
+                    # Re-raise after all retries exhausted
+                    raise
+            except CommandFailedError:
+                # Permanent errors (e.g., 404, 400) - don't retry, propagate immediately
+                raise
+            except RehauNeasmart2Error:
+                # Other custom errors - propagate immediately
+                raise
             except Exception as err:
+                # Truly unexpected errors - log and wrap
                 _LOGGER.error("Unexpected error during request to %s: %s", url, err)
                 raise ConnectionError(f"Unexpected error at {url}: {err}") from err
 
