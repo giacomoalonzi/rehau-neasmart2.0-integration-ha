@@ -13,7 +13,7 @@ tags:
   - name: System
     description: 'System-level information like temperature, notifications, and health'
 paths:
-  /api/zones:
+  /zones:
     get:
       summary: List all configured and active zones
       tags:
@@ -29,7 +29,7 @@ paths:
                 $ref: '#/components/schemas/ZonesListResponse'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
-  /api/zones/{base_id}/{zone_id}:
+  /zones/{base_id}/{zone_id}:
     get:
       summary: Get specific zone information
       tags:
@@ -95,11 +95,11 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
-  /api/mixedgroups/{group_id}: {}
-  /api/outsidetemperature: {}
-  /api/notifications: {}
-  /api/mode: {}
-  /api/state:
+  /mixedgroups/{group_id}: {}
+  /outsidetemperature: {}
+  /notifications: {}
+  /mode: {}
+  /state:
     get:
       summary: Get global operation state
       tags:
@@ -137,9 +137,9 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
-  /api/dehumidifiers/{dehumidifier_id}: {}
-  /api/pumps/{pump_id}: {}
-  /api/health:
+  /dehumidifiers/{dehumidifier_id}: {}
+  /pumps/{pump_id}: {}
+  /health:
     get:
       summary: Get system health status
       tags:
