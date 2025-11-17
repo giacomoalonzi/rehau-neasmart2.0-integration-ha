@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from .const import DOMAIN
 from .exceptions import ConnectionError, DataValidationError
 from .http_client import HttpClient, RehauNeasmart2ApiClient
-from .models import ConfigData, DeviceInfo, Zone, OperationState, HealthResponse, ZoneState
+from .models import ConfigData, DeviceInfo, Zone, OperationState, HealthResponse, HealthStatus, ZoneState
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -122,7 +122,7 @@ class RehauNeasmart2ClimateControlSystem:
         """Test connection to the API server."""
         try:
             health = await self._api_client.health_check()
-            self.online = health.status != "unhealthy"
+            self.online = health.status != HealthStatus.UNHEALTHY
             self._health_response = health
             return self.online
         except ConnectionError:
@@ -138,7 +138,8 @@ class RehauNeasmart2ClimateControlSystem:
             # Get global operation state
             self._operation_state = await self._api_client.get_operation_state()
             
-            self.online = True
+            # Set online status based on health status
+            self.online = self._health_response.status != HealthStatus.UNHEALTHY
         except (ConnectionError, DataValidationError) as err:
             _LOGGER.error("Failed to update system status: %s", err)
             self.online = False
