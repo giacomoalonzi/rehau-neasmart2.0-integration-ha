@@ -84,7 +84,6 @@ class Zone:
     temperature: Temperature
     setpoint: Optional[Temperature]
     relative_humidity: int
-    address: int
     
     @property
     def unique_id(self) -> str:

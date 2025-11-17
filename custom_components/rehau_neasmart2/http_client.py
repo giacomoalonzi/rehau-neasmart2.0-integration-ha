@@ -421,23 +421,13 @@ class RehauNeasmart2ApiClient:
                 )
                 relative_humidity = 0
             
-            # Safely parse address
-            address = data.get("address")
-            if address is None:
-                _LOGGER.warning(
-                    "Missing address for zone %s. Available keys: %s. Defaulting to 0",
-                    zone_info.id, list(data.keys())
-                )
-                address = 0
-            
             parsed_zone = Zone(
                 base=base,
                 zone=zone_info,
                 state=zone_state,
                 temperature=temperature,
                 setpoint=setpoint,
-                relative_humidity=int(relative_humidity),
-                address=int(address)
+                relative_humidity=int(relative_humidity)
             )
             
             _LOGGER.debug(

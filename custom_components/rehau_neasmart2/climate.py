@@ -324,7 +324,6 @@ class RehauNeasmart2ZoneClimateEntity(RehauNeasmart2GenericClimateEntity):
             attrs["zone_id"] = self._zone_data.zone.id
             attrs["base_label"] = self._zone_data.base.label
             attrs["zone_label"] = self._zone_data.zone.label
-            attrs["address"] = self._zone_data.address
             
             if self._zone_data.temperature:
                 attrs["temperature_unit"] = self._zone_data.temperature.unit.value

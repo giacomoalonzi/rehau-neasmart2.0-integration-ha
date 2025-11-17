@@ -250,9 +250,6 @@ components:
         relative_humidity:
           type: integer
           example: 45
-        address:
-          type: integer
-          example: 1300
     ZonesListResponse:
       type: object
       properties:
