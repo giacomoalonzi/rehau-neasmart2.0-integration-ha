@@ -26,14 +26,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.data
     )
     
-    # Initialize HTTP client
-    await climate_system.async_init()
-    
-    # Test connection
+    # Initialize HTTP client and test connection with proper cleanup
     try:
+        await climate_system.async_init()
         if not await climate_system.test_connection():
+            await climate_system.async_close()
             raise ConfigEntryNotReady("Unable to connect to Neasmart gateway")
-    except ConnectionError as err:
+    except ConfigEntryNotReady:
+        # Re-raise ConfigEntryNotReady without wrapping
+        raise
+    except (ConnectionError, Exception) as err:
         _LOGGER.error("Failed to connect to Neasmart gateway: %s", err)
         await climate_system.async_close()
         raise ConfigEntryNotReady from err
