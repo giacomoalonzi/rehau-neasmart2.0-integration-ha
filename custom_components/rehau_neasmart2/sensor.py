@@ -250,7 +250,7 @@ class RehauNeasmart2SystemHealthSensor(RehauNeasmart2GenericSensor):
     """System health sensor."""
     
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = ["healthy", "degraded", "unhealthy"]
+    _attr_options = ("healthy", "degraded", "unhealthy")
 
     def __init__(self, device) -> None:
         """Initialize the sensor."""
@@ -269,6 +269,7 @@ class RehauNeasmart2SystemHealthSensor(RehauNeasmart2GenericSensor):
                 await self._device.update_system_status()
                 if self._device._health_response:
                     self._attr_native_value = self._device._health_response.status.value
+                    self._reset_error_count()
                 else:
                     raise ValueError("No health data received")
         except Exception as err:
@@ -308,6 +309,7 @@ class RehauNeasmart2SystemVersionSensor(RehauNeasmart2GenericSensor):
                 await self._device.update_system_status()
                 if self._device._health_response:
                     self._attr_native_value = self._device._health_response.version
+                    self._reset_error_count()
                 else:
                     raise ValueError("No health data received")
         except Exception as err:
