@@ -80,7 +80,12 @@ class RehauNeasmart2GenericSensor(SensorEntity, RestoreEntity):
     @property
     def available(self) -> bool:
         """Return if entity is available."""
-        return self._device.hub.online and self._available
+        # Check if device has a hub attribute (zones) or is the hub itself (system sensors)
+        if hasattr(self._device, "hub"):
+            device_online = getattr(self._device.hub, "online", False)
+        else:
+            device_online = getattr(self._device, "online", False)
+        return device_online and self._available
 
     def _handle_update_error(self, error: Exception) -> None:
         """Handle update errors with retry logic."""
