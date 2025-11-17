@@ -1,34 +1,76 @@
+"""Climate platform for Rehau Neasmart 2.0 integration."""
+from __future__ import annotations
+
 import logging
-from .const import DOMAIN, PRESET_STATES_MAPPING, PRESET_STATES_MAPPING_REVERSE
-from homeassistant.components.climate import ClimateEntity, ClimateEntityFeature, HVACMode
+from typing import Any, Dict, List, Optional
+
+from homeassistant.components.climate import (
+    ClimateEntity,
+    ClimateEntityFeature,
+    HVACMode,
+)
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.const import UnitOfTemperature
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.const import ATTR_TEMPERATURE
+
+from .const import DOMAIN
+from .exceptions import DataValidationError
+from .models import Zone, ZoneState
 
 _LOGGER = logging.getLogger(__name__)
 
-# Asynchronously sets up the climate entities for the given configuration entry in Home Assistant.
-async def async_setup_entry(hass, config_entry, async_add_entities):
-    """Add sensors for passed config_entry in HA."""
+# Mapping between Home Assistant preset modes and API zone states
+PRESET_MODE_MAPPING = {
+    "presence": ZoneState.PRESENCE,
+    "away": ZoneState.AWAY,
+    "standby": ZoneState.STANDBY,
+    "scheduled": ZoneState.SCHEDULED,
+}
+
+PRESET_MODE_MAPPING_REVERSE = {v: k for k, v in PRESET_MODE_MAPPING.items()}
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up climate entities from a config entry."""
     hub = hass.data[DOMAIN][config_entry.entry_id]
-    devices = [RehauNeasmart2ZoneClimateEntity(k) for k in hub.zones]
+    
+    entities: List[ClimateEntity] = [
+        RehauNeasmart2ZoneClimateEntity(zone) for zone in hub.zones
+    ]
+    
+    if entities:
+        async_add_entities(entities)
 
-    if devices:
-        async_add_entities(devices)
 
-# Base class for Rehau Neasmart2 climate entities, inheriting from ClimateEntity and RestoreEntity.
 class RehauNeasmart2GenericClimateEntity(ClimateEntity, RestoreEntity):
+    """Base class for Rehau Neasmart2 climate entities."""
+    
     _attr_has_entity_name = False
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_hvac_modes = [HVACMode.AUTO, HVACMode.OFF]
+    _attr_hvac_mode = HVACMode.AUTO
 
-    def __init__(self, device):
+    def __init__(self, device) -> None:
+        """Initialize the climate entity."""
         self._device = device
-        self._state = None
+        self._attr_unique_id = f"{device.id}_thermostat"
+        self._attr_name = f"{device.name} Thermostat"
+        
+        # State variables
+        self._available = True
+        self._update_error_count = 0
+        self._max_errors = 3
 
-    # Provides device information for Home Assistant.
     @property
-    def device_info(self):
+    def device_info(self) -> DeviceInfo:
+        """Return device information."""
         return DeviceInfo(
             identifiers={(DOMAIN, self._device.id)},
             name=self._device.name,
@@ -36,52 +78,262 @@ class RehauNeasmart2GenericClimateEntity(ClimateEntity, RestoreEntity):
             model=self._device.model,
         )
 
-    # Indicates whether the device is available based on the hub's online status.
     @property
     def available(self) -> bool:
-        return self._device.hub.online
+        """Return if entity is available."""
+        return self._device.hub.online and self._available
 
-# Specific class for Rehau Neasmart2 zone climate entities.
-class RehauNeasmart2ZoneClimateEntity(RehauNeasmart2GenericClimateEntity):
-    def __init__(self, device):
-        super().__init__(device)
-        self._attr_unique_id = f"{self._device.id}_thermostat"
-        self._attr_name = f"{self._device.name} Thermostat"
-        self._attr_supported_features |= ClimateEntityFeature.PRESET_MODE
-        self._attr_supported_features |= ClimateEntityFeature.TARGET_TEMPERATURE
-        self._attr_hvac_modes = [HVACMode.AUTO]
-        self._attr_hvac_mode = HVACMode.AUTO
-
-        self._attr_preset_mode = None
-        self._attr_preset_modes = list(PRESET_STATES_MAPPING.keys())
-        self._attr_current_humidity = None
-        self._attr_current_temperature = None
-        self._attr_target_temperature = None
-
-    # Asynchronously updates the climate entity's state based on the zone data.
-    async def async_update(self) -> None:
-        zone_data = await self._device.get_zone_data()
-        if zone_data is not None and \
-                zone_data.get("state") is not None and \
-                zone_data.get("relative_humidity") is not None and \
-                zone_data.get("temperature") is not None and \
-                zone_data.get("setpoint") is not None:
-            self._attr_preset_mode = PRESET_STATES_MAPPING_REVERSE[zone_data["state"]]
-            self._attr_current_humidity = zone_data["relative_humidity"]
-            self._attr_current_temperature = zone_data["temperature"]
-            self._attr_target_temperature = zone_data["setpoint"]
+    def _handle_update_error(self, error: Exception) -> None:
+        """Handle update errors with retry logic."""
+        self._update_error_count += 1
+        if self._update_error_count >= self._max_errors:
+            self._available = False
+            _LOGGER.error(
+                "Too many errors for %s, marking as unavailable: %s",
+                self._attr_unique_id,
+                error
+            )
         else:
-            _LOGGER.error(f"Error updating {self._attr_unique_id} thermostat")
+            _LOGGER.warning(
+                "Error updating %s (attempt %d/%d): %s",
+                self._attr_unique_id,
+                self._update_error_count,
+                self._max_errors,
+                error
+            )
 
-    # Asynchronously sets the preset mode for the climate entity.
-    async def async_set_preset_mode(self, preset_mode: str):
-        if not await self._device.set_zone_state(PRESET_STATES_MAPPING[preset_mode]):
-            _LOGGER.error(f"Error setting preset mode for {self._attr_unique_id} thermostat")
+    def _reset_error_count(self) -> None:
+        """Reset error count on successful update."""
+        if self._update_error_count > 0:
+            self._update_error_count = 0
+            self._available = True
 
-    # Asynchronously sets the target temperature for the climate entity.
-    async def async_set_temperature(self, **kwargs):
-        temperature = kwargs.get(ATTR_TEMPERATURE)
-        if temperature is None:
+
+class RehauNeasmart2ZoneClimateEntity(RehauNeasmart2GenericClimateEntity):
+    """Climate entity for Rehau Neasmart2 zones."""
+
+    def __init__(self, device) -> None:
+        """Initialize zone climate entity."""
+        super().__init__(device)
+        
+        # Add zone-specific features
+        self._attr_supported_features = (
+            ClimateEntityFeature.PRESET_MODE
+            | ClimateEntityFeature.TARGET_TEMPERATURE
+        )
+        
+        # Preset modes
+        self._attr_preset_modes = list(PRESET_MODE_MAPPING.keys())
+        self._attr_preset_mode = None
+        
+        # Temperature attributes
+        self._attr_current_humidity: Optional[float] = None
+        self._attr_current_temperature: Optional[float] = None
+        self._attr_target_temperature: Optional[float] = None
+        
+        # Temperature limits
+        self._attr_min_temp = 5.0
+        self._attr_max_temp = 30.0
+        self._attr_target_temperature_step = 0.5
+        
+        # Store zone data
+        self._zone_data: Optional[Zone] = None
+
+    async def async_update(self) -> None:
+        """Update zone climate entity state."""
+        try:
+            zone_data = await self._device.get_zone_data()
+            
+            if zone_data is None:
+                raise DataValidationError("No data received from zone")
+            
+            self._zone_data = zone_data
+            
+            # Update HVAC mode and preset mode based on zone state
+            # Show as OFF when state is OFF or STANDBY
+            if zone_data.state == ZoneState.OFF or zone_data.state == ZoneState.STANDBY:
+                self._attr_hvac_mode = HVACMode.OFF
+                self._attr_preset_mode = None
+            else:
+                self._attr_hvac_mode = HVACMode.AUTO
+                self._attr_preset_mode = PRESET_MODE_MAPPING_REVERSE.get(zone_data.state)
+            
+            # Update measurements
+            self._attr_current_humidity = float(zone_data.relative_humidity)
+            self._attr_current_temperature = float(zone_data.temperature.value)
+            
+            # Update target temperature if available
+            # Setpoint of -17.7 indicates "off" or "not set", show as "--" (None)
+            if zone_data.setpoint:
+                setpoint_value = float(zone_data.setpoint.value)
+                _LOGGER.debug(
+                    "Zone %s setpoint value: %.10f (checking if == -17.7)",
+                    self._attr_unique_id, setpoint_value
+                )
+                # Use tolerance for float comparison (handle -17.7, -17.70, etc.)
+                if abs(setpoint_value - (-17.7)) < 0.1:
+                    # Special value indicating zone is off/not set, show as "--"
+                    _LOGGER.debug(
+                        "Zone %s setpoint %.1f treated as -17.7, setting target_temperature to None (--)",
+                        self._attr_unique_id, setpoint_value
+                    )
+                    self._attr_target_temperature = None
+                else:
+                    self._attr_target_temperature = setpoint_value
+            else:
+                self._attr_target_temperature = None
+            
+            # Validate ranges
+            if not -50 <= self._attr_current_temperature <= 100:
+                _LOGGER.warning(
+                    "Temperature %s out of range for %s",
+                    self._attr_current_temperature,
+                    self._attr_unique_id
+                )
+            
+            if not 0 <= self._attr_current_humidity <= 100:
+                _LOGGER.warning(
+                    "Humidity %s out of range for %s",
+                    self._attr_current_humidity,
+                    self._attr_unique_id
+                )
+            
+            self._reset_error_count()
+            
+        except Exception as err:
+            self._handle_update_error(err)
+            _LOGGER.error(
+                "Error updating %s thermostat: %s",
+                self._attr_unique_id,
+                err
+            )
+
+    async def async_set_preset_mode(self, preset_mode: str) -> None:
+        """Set new preset mode."""
+        if preset_mode not in PRESET_MODE_MAPPING:
+            _LOGGER.error(
+                "Invalid preset mode %s for %s",
+                preset_mode,
+                self._attr_unique_id
+            )
             return
-        if not await self._device.set_zone_setpoint(temperature):
-            _LOGGER.error(f"Error setting temperature setpoint for {self._attr_unique_id} thermostat")
+        
+        try:
+            zone_state = PRESET_MODE_MAPPING[preset_mode]
+            success = await self._device.set_zone_state(zone_state)
+            
+            if success:
+                self._attr_preset_mode = preset_mode
+                self._attr_hvac_mode = HVACMode.AUTO
+                self.async_write_ha_state()
+            else:
+                _LOGGER.error(
+                    "Failed to set preset mode %s for %s",
+                    preset_mode,
+                    self._attr_unique_id
+                )
+                
+        except Exception as err:
+            _LOGGER.error(
+                "Error setting preset mode for %s: %s",
+                self._attr_unique_id,
+                err
+            )
+
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        """Set new HVAC mode."""
+        try:
+            if hvac_mode == HVACMode.OFF:
+                # Set zone to STANDBY state (API requires STANDBY, not OFF for zones)
+                _LOGGER.debug("Setting zone %s to STANDBY state", self._attr_unique_id)
+                success = await self._device.set_zone_state(ZoneState.STANDBY)
+                if success:
+                    _LOGGER.debug("Successfully set zone %s to STANDBY", self._attr_unique_id)
+                    self._attr_hvac_mode = HVACMode.OFF
+                    self._attr_preset_mode = None
+                    self.async_write_ha_state()
+                else:
+                    _LOGGER.warning("Failed to set zone %s to STANDBY state", self._attr_unique_id)
+            elif hvac_mode == HVACMode.AUTO:
+                # Set zone to presence state (default active state)
+                _LOGGER.debug("Setting zone %s to AUTO (presence) state", self._attr_unique_id)
+                success = await self._device.set_zone_state(ZoneState.PRESENCE)
+                if success:
+                    _LOGGER.debug("Successfully set zone %s to AUTO", self._attr_unique_id)
+                    self._attr_hvac_mode = HVACMode.AUTO
+                    self._attr_preset_mode = "presence"
+                    self.async_write_ha_state()
+                else:
+                    _LOGGER.warning("Failed to set zone %s to AUTO state", self._attr_unique_id)
+            else:
+                _LOGGER.error("Unsupported HVAC mode %s for %s", hvac_mode, self._attr_unique_id)
+        except Exception as err:
+            _LOGGER.error("Error setting HVAC mode for %s: %s", self._attr_unique_id, err, exc_info=True)
+
+    async def async_set_temperature(self, **kwargs: Any) -> None:
+        """Set new target temperature."""
+        temperature = kwargs.get(ATTR_TEMPERATURE)
+        
+        if temperature is None:
+            _LOGGER.error("No temperature provided for %s", self._attr_unique_id)
+            return
+        
+        # Validate temperature range
+        if not self._attr_min_temp <= temperature <= self._attr_max_temp:
+            _LOGGER.error(
+                "Temperature %s out of range [%s, %s] for %s",
+                temperature,
+                self._attr_min_temp,
+                self._attr_max_temp,
+                self._attr_unique_id
+            )
+            return
+        
+        try:
+            success = await self._device.set_zone_setpoint(float(temperature))
+            
+            if success:
+                self._attr_target_temperature = float(temperature)
+                self.async_write_ha_state()
+            else:
+                _LOGGER.error(
+                    "Failed to set temperature %s for %s",
+                    temperature,
+                    self._attr_unique_id
+                )
+                
+        except Exception as err:
+            _LOGGER.error(
+                "Error setting temperature for %s: %s",
+                self._attr_unique_id,
+                err
+            )
+
+    async def async_added_to_hass(self) -> None:
+        """Restore state when entity is added."""
+        await super().async_added_to_hass()
+        
+        # Restore previous state if available
+        if (last_state := await self.async_get_last_state()) is not None:
+            if last_state.attributes.get("temperature"):
+                self._attr_target_temperature = float(
+                    last_state.attributes["temperature"]
+                )
+            if last_state.attributes.get("preset_mode"):
+                self._attr_preset_mode = last_state.attributes["preset_mode"]
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Return extra state attributes."""
+        attrs = {}
+        
+        if self._zone_data:
+            attrs["base_id"] = self._zone_data.base.id
+            attrs["zone_id"] = self._zone_data.zone.id
+            attrs["base_label"] = self._zone_data.base.label
+            attrs["zone_label"] = self._zone_data.zone.label
+            
+            if self._zone_data.temperature:
+                attrs["temperature_unit"] = self._zone_data.temperature.unit.value
+        
+        return attrs
