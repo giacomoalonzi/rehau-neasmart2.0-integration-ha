@@ -215,10 +215,26 @@ class RehauNeasmart2Zone:
     async def get_zone_data(self) -> Zone | None:
         """Get zone data."""
         try:
+            _LOGGER.debug("Fetching zone data for base_id=%s, zone_id=%s", self.base_id, self.zone_id)
             self._zone_data = await self.hub._api_client.get_zone(self.base_id, self.zone_id)
+            if self._zone_data:
+                _LOGGER.debug(
+                    "Successfully retrieved zone data for %s: temp=%s, setpoint=%s, humidity=%s",
+                    self.id,
+                    self._zone_data.temperature.value if self._zone_data.temperature else None,
+                    self._zone_data.setpoint.value if self._zone_data.setpoint else None,
+                    self._zone_data.relative_humidity
+                )
+            else:
+                _LOGGER.warning("get_zone returned None for %s (base_id=%s, zone_id=%s)", self.id, self.base_id, self.zone_id)
             return self._zone_data
         except Exception as err:
-            _LOGGER.error("Failed to get zone data for %s: %s", self.id, err)
+            _LOGGER.error(
+                "Failed to get zone data for %s (base_id=%s, zone_id=%s): %s. "
+                "Exception type: %s",
+                self.id, self.base_id, self.zone_id, err, type(err).__name__,
+                exc_info=True
+            )
             return None
     
     async def set_zone_setpoint(self, setpoint: float) -> bool:

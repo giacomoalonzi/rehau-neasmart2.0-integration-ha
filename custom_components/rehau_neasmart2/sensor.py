@@ -129,9 +129,17 @@ class RehauNeasmart2ZoneTemperatureSensor(RehauNeasmart2GenericSensor):
             if zone_data is not None:
                 self._zone_data = zone_data
                 self._attr_native_value = zone_data.temperature.value
+                _LOGGER.debug(
+                    "Updated temperature sensor %s: %s",
+                    self._attr_unique_id,
+                    self._attr_native_value
+                )
                 self._reset_error_count()
             else:
-                raise ValueError("No zone data received")
+                raise ValueError(
+                    f"No zone data received for {self._device.id} "
+                    f"(base_id={self._device.base_id}, zone_id={self._device.zone_id})"
+                )
         except Exception as err:
             self._handle_update_error(err)
 
@@ -162,9 +170,17 @@ class RehauNeasmart2ZoneHumiditySensor(RehauNeasmart2GenericSensor):
             zone_data = await self._device.get_zone_data()
             if zone_data is not None:
                 self._attr_native_value = zone_data.relative_humidity
+                _LOGGER.debug(
+                    "Updated humidity sensor %s: %s",
+                    self._attr_unique_id,
+                    self._attr_native_value
+                )
                 self._reset_error_count()
             else:
-                raise ValueError("No zone data received")
+                raise ValueError(
+                    f"No zone data received for {self._device.id} "
+                    f"(base_id={self._device.base_id}, zone_id={self._device.zone_id})"
+                )
         except Exception as err:
             self._handle_update_error(err)
 
@@ -191,11 +207,23 @@ class RehauNeasmart2ZoneSetpointSensor(RehauNeasmart2GenericSensor):
                 self._zone_data = zone_data
                 if zone_data.setpoint:
                     self._attr_native_value = zone_data.setpoint.value
+                    _LOGGER.debug(
+                        "Updated setpoint sensor %s: %s",
+                        self._attr_unique_id,
+                        self._attr_native_value
+                    )
                 else:
                     self._attr_native_value = None
+                    _LOGGER.debug(
+                        "Setpoint sensor %s: setpoint is None (zone may be off)",
+                        self._attr_unique_id
+                    )
                 self._reset_error_count()
             else:
-                raise ValueError("No zone data received")
+                raise ValueError(
+                    f"No zone data received for {self._device.id} "
+                    f"(base_id={self._device.base_id}, zone_id={self._device.zone_id})"
+                )
         except Exception as err:
             self._handle_update_error(err)
 

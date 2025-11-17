@@ -86,10 +86,35 @@ class HttpClient:
                         # Check for error responses
                         if response.status >= 400:
                             error_msg = data.get("error", "Unknown error")
+                            error_details = data.get("details", {})
+                            _LOGGER.debug(
+                                "API error response: status=%s, error=%s, details=%s",
+                                response.status, error_msg, error_details
+                            )
                             if response.status == 503:
                                 raise ConnectionError(f"Service unavailable at {url}: {error_msg}")
+                            elif response.status == 404:
+                                # Zone or resource not found - might be a permanent error
+                                _LOGGER.warning(
+                                    "Zone/resource not found (404) at %s: %s",
+                                    url, error_msg
+                                )
+                                raise CommandFailedError(
+                                    f"Resource not found (404) at {url}: {error_msg}"
+                                )
+                            elif response.status == 400:
+                                # Bad request - likely a validation error
+                                _LOGGER.warning(
+                                    "Bad request (400) at %s: %s. Details: %s",
+                                    url, error_msg, error_details
+                                )
+                                raise CommandFailedError(
+                                    f"Bad request (400) at {url}: {error_msg}. Details: {error_details}"
+                                )
                             else:
-                                raise CommandFailedError(f"API error {response.status} at {url}: {error_msg}")
+                                raise CommandFailedError(
+                                    f"API error {response.status} at {url}: {error_msg}"
+                                )
                         
                         return data
                     else:
@@ -144,10 +169,15 @@ class RehauNeasmart2ApiClient:
         """Get all zones."""
         async def fetch():
             data = await self.http.get("/zones")
+            _LOGGER.debug("Received zones list response: %s", data)
             zones = []
-            for zone_data in data["zones"]:
-                zone = self._parse_zone(zone_data)
-                zones.append(zone)
+            for zone_data in data.get("zones", []):
+                try:
+                    zone = self._parse_zone(zone_data)
+                    zones.append(zone)
+                except DataValidationError as err:
+                    _LOGGER.error("Failed to parse zone from list: %s", err)
+                    continue
             return zones
         
         return await self._cache.get_or_fetch("zones_list", fetch)
@@ -157,10 +187,34 @@ class RehauNeasmart2ApiClient:
         cache_key = f"zone_{base_id}_{zone_id}"
         
         async def fetch():
-            data = await self.http.get(f"/zones/{base_id}/{zone_id}")
-            return self._parse_zone(data)
+            try:
+                data = await self.http.get(f"/zones/{base_id}/{zone_id}")
+                _LOGGER.debug("Received zone %s/%s response: %s", base_id, zone_id, data)
+                parsed_zone = self._parse_zone(data)
+                _LOGGER.debug(
+                    "Successfully parsed zone %s/%s: temp=%s, setpoint=%s, humidity=%s",
+                    base_id, zone_id,
+                    parsed_zone.temperature.value if parsed_zone.temperature else None,
+                    parsed_zone.setpoint.value if parsed_zone.setpoint else None,
+                    parsed_zone.relative_humidity
+                )
+                return parsed_zone
+            except Exception as err:
+                _LOGGER.error(
+                    "Error fetching/parsing zone %s/%s: %s. Type: %s",
+                    base_id, zone_id, err, type(err).__name__,
+                    exc_info=True
+                )
+                # Don't cache errors - re-raise so caller can handle it
+                raise
         
-        return await self._cache.get_or_fetch(cache_key, fetch)
+        try:
+            return await self._cache.get_or_fetch(cache_key, fetch)
+        except Exception as err:
+            # Invalidate cache on error to prevent caching bad data
+            self._cache.invalidate(cache_key)
+            _LOGGER.debug("Invalidated cache for zone %s/%s due to error", base_id, zone_id)
+            raise
 
     async def update_zone(
         self, 
@@ -240,6 +294,9 @@ class RehauNeasmart2ApiClient:
 
     def _parse_zone(self, data: Dict[str, Any]) -> Zone:
         """Parse zone data from API response."""
+        # DEBUG: Log raw data to see what we're receiving from API
+        _LOGGER.debug("Parsing zone data. Raw API response: %s", data)
+        
         try:
             # Handle both nested format (base.id, zone.id) and flattened format (baseId, zoneId)
             if "base" in data and "zone" in data:
@@ -272,41 +329,127 @@ class RehauNeasmart2ApiClient:
             
             # Safely parse temperature
             temp_data = data.get("temperature")
-            if not temp_data or temp_data.get("value") is None:
-                raise DataValidationError(f"Missing or invalid temperature data for zone {zone_info.id}")
+            _LOGGER.debug("Temperature data for zone %s: %s", zone_info.id, temp_data)
             
-            temperature = Temperature(
-                value=float(temp_data["value"]),
-                unit=TemperatureUnit(temp_data.get("unit", "°C"))
-            )
+            # Check if temperature exists (handle 0 as valid value)
+            if temp_data is None:
+                raise DataValidationError(
+                    f"Missing temperature data for zone {zone_info.id}. "
+                    f"Available keys: {list(data.keys())}"
+                )
+            
+            # Handle both object format {"value": 21.5, "unit": "°C"} and direct numeric value
+            if isinstance(temp_data, dict):
+                if temp_data.get("value") is None:
+                    raise DataValidationError(
+                        f"Missing temperature value for zone {zone_info.id}. "
+                        f"Temperature object: {temp_data}"
+                    )
+                temperature = Temperature(
+                    value=float(temp_data["value"]),
+                    unit=TemperatureUnit(temp_data.get("unit", "°C"))
+                )
+            elif isinstance(temp_data, (int, float)):
+                # Direct numeric value
+                _LOGGER.debug("Temperature is direct numeric value: %s", temp_data)
+                temperature = Temperature(
+                    value=float(temp_data),
+                    unit=TemperatureUnit("°C")
+                )
+            else:
+                raise DataValidationError(
+                    f"Invalid temperature format for zone {zone_info.id}: {type(temp_data)} - {temp_data}"
+                )
             
             # Safely parse setpoint
             setpoint = None
             setpoint_data = data.get("setpoint")
-            if setpoint_data and setpoint_data.get("value") is not None:
-                setpoint = Temperature(
-                    value=float(setpoint_data["value"]),
-                    unit=TemperatureUnit(setpoint_data.get("unit", "°C"))
-                )
+            _LOGGER.debug("Setpoint data for zone %s: %s", zone_info.id, setpoint_data)
+            
+            if setpoint_data is not None:
+                if isinstance(setpoint_data, dict):
+                    # Handle object format {"value": 21.5, "unit": "°C"}
+                    setpoint_value = setpoint_data.get("value")
+                    if setpoint_value is not None:
+                        setpoint = Temperature(
+                            value=float(setpoint_value),
+                            unit=TemperatureUnit(setpoint_data.get("unit", "°C"))
+                        )
+                elif isinstance(setpoint_data, (int, float)):
+                    # Direct numeric value (including negative values like -17.7 which might indicate "off")
+                    _LOGGER.debug("Setpoint is direct numeric value: %s", setpoint_data)
+                    # Negative setpoint values are valid (e.g., -17.7 might indicate zone is off)
+                    setpoint = Temperature(
+                        value=float(setpoint_data),
+                        unit=TemperatureUnit("°C")
+                    )
+                else:
+                    _LOGGER.warning(
+                        "Invalid setpoint format for zone %s: %s (type: %s). Ignoring.",
+                        zone_info.id, setpoint_data, type(setpoint_data)
+                    )
             
             # Parse state - handle both object format and string format
             state_data = data.get("state")
+            _LOGGER.debug("State data for zone %s: %s", zone_info.id, state_data)
+            
             if isinstance(state_data, dict):
                 # New format: {"state": "presence"}
                 zone_state = ZoneState(state_data["state"])
-            else:
+            elif isinstance(state_data, str):
                 # Legacy format: "presence" (string directly)
                 zone_state = ZoneState(state_data)
+            else:
+                raise DataValidationError(
+                    f"Invalid state format for zone {zone_info.id}: {type(state_data)} - {state_data}"
+                )
             
-            return Zone(
+            # Safely parse relative_humidity - handle both snake_case and camelCase
+            # Check both formats, handling 0 as a valid value
+            relative_humidity = None
+            if "relative_humidity" in data:
+                relative_humidity = data["relative_humidity"]
+            elif "relativeHumidity" in data:
+                relative_humidity = data["relativeHumidity"]
+            
+            _LOGGER.debug("Humidity data for zone %s: %s", zone_info.id, relative_humidity)
+            
+            if relative_humidity is None:
+                _LOGGER.warning(
+                    "Missing relative_humidity for zone %s. Available keys: %s. Defaulting to 0",
+                    zone_info.id, list(data.keys())
+                )
+                relative_humidity = 0
+            
+            # Safely parse address
+            address = data.get("address")
+            if address is None:
+                _LOGGER.warning(
+                    "Missing address for zone %s. Available keys: %s. Defaulting to 0",
+                    zone_info.id, list(data.keys())
+                )
+                address = 0
+            
+            parsed_zone = Zone(
                 base=base,
                 zone=zone_info,
                 state=zone_state,
                 temperature=temperature,
                 setpoint=setpoint,
-                relative_humidity=data["relative_humidity"],
-                address=data["address"]
+                relative_humidity=int(relative_humidity),
+                address=int(address)
             )
+            
+            _LOGGER.debug(
+                "Successfully parsed zone %s/%s: temp=%.1f°C, setpoint=%s, humidity=%d%%, state=%s",
+                base.id, zone_info.id,
+                temperature.value,
+                f"{setpoint.value:.1f}°C" if setpoint else "None",
+                relative_humidity,
+                zone_state.value
+            )
+            
+            return parsed_zone
         except (KeyError, TypeError, ValueError) as err:
             _LOGGER.error("Failed to parse zone data: %s. Raw data: %s", err, data)
             raise DataValidationError(f"Invalid zone data structure: {err}") from err
