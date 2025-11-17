@@ -75,6 +75,8 @@ class HttpClient:
                     "Making %s request to %s (attempt %d/%d)",
                     method, url, attempt + 1, MAX_RETRIES
                 )
+                if json:
+                    _LOGGER.debug("Request payload: %s", json)
                 
                 async with self._session.request(
                     method, url, json=json, **kwargs
@@ -233,7 +235,17 @@ class RehauNeasmart2ApiClient:
         if not payload:
             raise ValueError("At least one of state or setpoint must be provided")
         
+        _LOGGER.debug(
+            "Updating zone %s/%s with payload: %s",
+            base_id, zone_id, payload
+        )
+        
         response = await self.http.post(f"/zones/{base_id}/{zone_id}", payload)
+        
+        _LOGGER.debug(
+            "Zone update response for %s/%s: %s",
+            base_id, zone_id, response
+        )
         
         # Invalidate cache after update
         self._cache.invalidate(f"zone_{base_id}_{zone_id}")

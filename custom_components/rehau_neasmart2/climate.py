@@ -244,23 +244,31 @@ class RehauNeasmart2ZoneClimateEntity(RehauNeasmart2GenericClimateEntity):
         """Set new HVAC mode."""
         try:
             if hvac_mode == HVACMode.OFF:
-                # Set zone to OFF state
-                success = await self._device.set_zone_state(ZoneState.OFF)
+                # Set zone to STANDBY state (API requires STANDBY, not OFF for zones)
+                _LOGGER.debug("Setting zone %s to STANDBY state", self._attr_unique_id)
+                success = await self._device.set_zone_state(ZoneState.STANDBY)
                 if success:
+                    _LOGGER.debug("Successfully set zone %s to STANDBY", self._attr_unique_id)
                     self._attr_hvac_mode = HVACMode.OFF
                     self._attr_preset_mode = None
                     self.async_write_ha_state()
+                else:
+                    _LOGGER.warning("Failed to set zone %s to STANDBY state", self._attr_unique_id)
             elif hvac_mode == HVACMode.AUTO:
                 # Set zone to presence state (default active state)
+                _LOGGER.debug("Setting zone %s to AUTO (presence) state", self._attr_unique_id)
                 success = await self._device.set_zone_state(ZoneState.PRESENCE)
                 if success:
+                    _LOGGER.debug("Successfully set zone %s to AUTO", self._attr_unique_id)
                     self._attr_hvac_mode = HVACMode.AUTO
                     self._attr_preset_mode = "presence"
                     self.async_write_ha_state()
+                else:
+                    _LOGGER.warning("Failed to set zone %s to AUTO state", self._attr_unique_id)
             else:
                 _LOGGER.error("Unsupported HVAC mode %s for %s", hvac_mode, self._attr_unique_id)
         except Exception as err:
-            _LOGGER.error("Error setting HVAC mode for %s: %s", self._attr_unique_id, err)
+            _LOGGER.error("Error setting HVAC mode for %s: %s", self._attr_unique_id, err, exc_info=True)
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set new target temperature."""
