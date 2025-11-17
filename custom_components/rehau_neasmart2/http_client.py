@@ -65,8 +65,10 @@ class HttpClient:
         if not self._session:
             await self.connect()
 
-        # Prepend API version to endpoint
-        full_endpoint = f"{API_VERSION}{endpoint}"
+        # Prepend API version to endpoint, normalizing slashes
+        # Strip leading slashes from endpoint to avoid double slashes
+        normalized_endpoint = endpoint.lstrip('/')
+        full_endpoint = f"{API_VERSION}{normalized_endpoint}"
         url = urljoin(self.base_url, full_endpoint.lstrip('/'))
         
         for attempt in range(MAX_RETRIES):
@@ -159,12 +161,21 @@ class RehauNeasmart2ApiClient:
     async def health_check(self) -> HealthResponse:
         """Check system health."""
         data = await self.http.get("/health")
+        
+        # Convert boolean healthy to HealthStatus enum
+        # API returns {"healthy": true/false, "version": "..."}
+        healthy = data.get("healthy", False)
+        if healthy:
+            status = HealthStatus.HEALTHY
+        else:
+            status = HealthStatus.UNHEALTHY
+        
         return HealthResponse(
-            status=HealthStatus(data["status"]),
-            version=data["version"],
-            database=data["database"],
-            modbus=data["modbus"],
-            configuration=data["configuration"]
+            status=status,
+            version=data.get("version", "unknown"),
+            database=data.get("database", {}),
+            modbus=data.get("modbus", {}),
+            configuration=data.get("configuration", {})
         )
 
     async def get_zones(self) -> List[Zone]:
