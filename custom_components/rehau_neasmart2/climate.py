@@ -18,18 +18,16 @@ from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import DOMAIN
 from .exceptions import DataValidationError
-from .models import Zone, OperationState
+from .models import Zone, ZoneState
 
 _LOGGER = logging.getLogger(__name__)
 
-# Mapping between Home Assistant preset modes and API operation states
+# Mapping between Home Assistant preset modes and API zone states
 PRESET_MODE_MAPPING = {
-    "normal": OperationState.NORMAL,
-    "reduced": OperationState.REDUCED,
-    "standby": OperationState.STANDBY,
-    "scheduled": OperationState.SCHEDULED,
-    "party": OperationState.PARTY,
-    "holiday": OperationState.HOLIDAY,
+    "presence": ZoneState.PRESENCE,
+    "away": ZoneState.AWAY,
+    "standby": ZoneState.STANDBY,
+    "scheduled": ZoneState.SCHEDULED,
 }
 
 PRESET_MODE_MAPPING_REVERSE = {v: k for k, v in PRESET_MODE_MAPPING.items()}
@@ -56,7 +54,7 @@ class RehauNeasmart2GenericClimateEntity(ClimateEntity, RestoreEntity):
     
     _attr_has_entity_name = False
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
-    _attr_hvac_modes = [HVACMode.AUTO]
+    _attr_hvac_modes = [HVACMode.AUTO, HVACMode.OFF]
     _attr_hvac_mode = HVACMode.AUTO
 
     def __init__(self, device) -> None:
@@ -151,8 +149,13 @@ class RehauNeasmart2ZoneClimateEntity(RehauNeasmart2GenericClimateEntity):
             
             self._zone_data = zone_data
             
-            # Update state from zone data
-            self._attr_preset_mode = PRESET_MODE_MAPPING_REVERSE.get(zone_data.state)
+            # Update HVAC mode and preset mode based on zone state
+            if zone_data.state == ZoneState.OFF:
+                self._attr_hvac_mode = HVACMode.OFF
+                self._attr_preset_mode = None
+            else:
+                self._attr_hvac_mode = HVACMode.AUTO
+                self._attr_preset_mode = PRESET_MODE_MAPPING_REVERSE.get(zone_data.state)
             
             # Update measurements
             self._attr_current_humidity = float(zone_data.relative_humidity)
@@ -198,11 +201,12 @@ class RehauNeasmart2ZoneClimateEntity(RehauNeasmart2GenericClimateEntity):
             return
         
         try:
-            operation_state = PRESET_MODE_MAPPING[preset_mode]
-            success = await self._device.set_zone_state(operation_state)
+            zone_state = PRESET_MODE_MAPPING[preset_mode]
+            success = await self._device.set_zone_state(zone_state)
             
             if success:
                 self._attr_preset_mode = preset_mode
+                self._attr_hvac_mode = HVACMode.AUTO
                 self.async_write_ha_state()
             else:
                 _LOGGER.error(
@@ -217,6 +221,28 @@ class RehauNeasmart2ZoneClimateEntity(RehauNeasmart2GenericClimateEntity):
                 self._attr_unique_id,
                 err
             )
+
+    async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
+        """Set new HVAC mode."""
+        try:
+            if hvac_mode == HVACMode.OFF:
+                # Set zone to OFF state
+                success = await self._device.set_zone_state(ZoneState.OFF)
+                if success:
+                    self._attr_hvac_mode = HVACMode.OFF
+                    self._attr_preset_mode = None
+                    self.async_write_ha_state()
+            elif hvac_mode == HVACMode.AUTO:
+                # Set zone to presence state (default active state)
+                success = await self._device.set_zone_state(ZoneState.PRESENCE)
+                if success:
+                    self._attr_hvac_mode = HVACMode.AUTO
+                    self._attr_preset_mode = "presence"
+                    self.async_write_ha_state()
+            else:
+                _LOGGER.error("Unsupported HVAC mode %s for %s", hvac_mode, self._attr_unique_id)
+        except Exception as err:
+            _LOGGER.error("Error setting HVAC mode for %s: %s", self._attr_unique_id, err)
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set new target temperature."""

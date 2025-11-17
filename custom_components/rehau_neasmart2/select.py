@@ -18,8 +18,9 @@ _LOGGER = logging.getLogger(__name__)
 
 # Mapping for user-friendly names
 OPERATION_STATE_OPTIONS = {
-    "normal": "Normal",
-    "reduced": "Reduced",
+    "off": "Off",
+    "presence": "Presence",
+    "away": "Away",
     "standby": "Standby",
     "scheduled": "Scheduled",
     "party": "Party",

@@ -90,14 +90,17 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             except ValueError:
                 errors["base"] = "invalid_endpoint"
-            except ConnectionError:
+            except ConnectionError as err:
+                full_url = f"http://{self._api_url}:{self._api_port}/api/health"
+                _LOGGER.error("Connection error to %s: %s", full_url, err)
                 errors["base"] = "cannot_connect"
                 if self._http_client:
                     await self._http_client.close()
                     self._http_client = None
                     self._api_client = None
             except Exception as err:
-                _LOGGER.exception("Unexpected exception during connection test")
+                full_url = f"http://{self._api_url}:{self._api_port}/api/health"
+                _LOGGER.exception("Unexpected exception during connection test to %s: %s", full_url, err)
                 errors["base"] = "unknown"
                 if self._http_client:
                     await self._http_client.close()
@@ -132,10 +135,13 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     # Move to zones configuration step
                     return await self.async_step_zones()
                     
-            except ConnectionError:
+            except ConnectionError as err:
+                full_url = f"http://{self._api_url}:{self._api_port}/api/zones"
+                _LOGGER.error("Connection error to %s: %s", full_url, err)
                 errors["base"] = "cannot_connect"
             except Exception as err:
-                _LOGGER.exception("Failed to fetch zones")
+                full_url = f"http://{self._api_url}:{self._api_port}/api/zones"
+                _LOGGER.exception("Failed to fetch zones from %s: %s", full_url, err)
                 errors["base"] = "unknown"
         
         return self.async_show_form(

@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from .const import DOMAIN
 from .exceptions import ConnectionError, DataValidationError
 from .http_client import HttpClient, RehauNeasmart2ApiClient
-from .models import ConfigData, DeviceInfo, Zone, OperationState, HealthResponse
+from .models import ConfigData, DeviceInfo, Zone, OperationState, HealthResponse, ZoneState
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -234,7 +234,7 @@ class RehauNeasmart2Zone:
             _LOGGER.error("Failed to set zone setpoint for %s: %s", self.id, err)
             return False
     
-    async def set_zone_state(self, state: OperationState) -> bool:
+    async def set_zone_state(self, state: ZoneState) -> bool:
         """Set zone state."""
         try:
             await self.hub._api_client.update_zone(
@@ -247,7 +247,7 @@ class RehauNeasmart2Zone:
             _LOGGER.error("Failed to set zone state for %s: %s", self.id, err)
             return False
     
-    async def update_zone(self, state: Optional[OperationState] = None, setpoint: Optional[float] = None) -> bool:
+    async def update_zone(self, state: Optional[ZoneState] = None, setpoint: Optional[float] = None) -> bool:
         """Update zone state and/or setpoint."""
         try:
             await self.hub._api_client.update_zone(

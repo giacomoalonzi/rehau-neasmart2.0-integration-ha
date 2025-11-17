@@ -7,13 +7,23 @@ from enum import Enum
 
 
 class OperationState(str, Enum):
-    """Operation states for zones and global system."""
-    NORMAL = "normal"
-    REDUCED = "reduced"
+    """Operation states for global system."""
+    OFF = "off"
+    PRESENCE = "presence"
+    AWAY = "away"
     STANDBY = "standby"
     SCHEDULED = "scheduled"
     PARTY = "party"
     HOLIDAY = "holiday"
+
+
+class ZoneState(str, Enum):
+    """Operation states for individual zones (subset of OperationState)."""
+    OFF = "off"
+    PRESENCE = "presence"
+    AWAY = "away"
+    STANDBY = "standby"
+    SCHEDULED = "scheduled"
 
 
 class TemperatureUnit(str, Enum):
@@ -70,7 +80,7 @@ class Zone:
     """Zone data model."""
     base: BaseInfo
     zone: ZoneInfo
-    state: OperationState
+    state: ZoneState
     temperature: Temperature
     setpoint: Optional[Temperature]
     relative_humidity: int
@@ -102,7 +112,7 @@ class ZonesListResponse:
 @dataclass
 class ZoneUpdateRequest:
     """Request model for zone update."""
-    state: Optional[OperationState] = None
+    state: Optional[ZoneState] = None
     setpoint: Optional[float] = None
     
     def validate(self) -> None:
@@ -230,8 +240,8 @@ class ConfigData:
 @dataclass
 class LegacyPresetState:
     """Legacy preset states - mapped to new OperationState."""
-    NORMAL = 1
-    REDUCED = 2
+    NORMAL = 1  # Maps to PRESENCE
+    REDUCED = 2  # Maps to AWAY
     STANDBY = 3
     TIME_PROGRAM = 4  # Maps to SCHEDULED
     PARTY = 5
@@ -241,11 +251,11 @@ class LegacyPresetState:
     def to_operation_state(legacy_state: int) -> OperationState:
         """Convert legacy state to new operation state."""
         mapping = {
-            1: OperationState.NORMAL,
-            2: OperationState.REDUCED,
+            1: OperationState.PRESENCE,
+            2: OperationState.AWAY,
             3: OperationState.STANDBY,
             4: OperationState.SCHEDULED,
             5: OperationState.PARTY,
             6: OperationState.HOLIDAY
         }
-        return mapping.get(legacy_state, OperationState.NORMAL) 
+        return mapping.get(legacy_state, OperationState.PRESENCE) 
