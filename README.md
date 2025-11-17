@@ -108,7 +108,7 @@ If you're experiencing connection problems:
 1. Verify the API gateway is running and accessible
 2. Check the IP address and port are correct
 3. Ensure there's no firewall blocking the connection
-4. Test the API directly using: `curl http://YOUR_IP:PORT/api/v1/health`
+4. Test the API directly using: `curl http://YOUR_IP:PORT/api/health`
 
 ### Zone Detection Issues
 
@@ -133,12 +133,12 @@ This integration uses the Rehau Neasmart 2.0 REST API v2.1.0. The API specificat
 
 Key endpoints used:
 
-- `GET /api/v1/zones` - List all zones
-- `GET /api/v1/zones/{base_id}/{zone_id}` - Get zone details
-- `POST /api/v1/zones/{base_id}/{zone_id}` - Update zone settings
-- `GET /api/v1/operation/state` - Get global operation state
-- `POST /api/v1/operation/state` - Set global operation state
-- `GET /api/v1/health` - System health check
+- `GET /api/zones` - List all zones
+- `GET /api/zones/{base_id}/{zone_id}` - Get zone details
+- `POST /api/zones/{base_id}/{zone_id}` - Update zone settings
+- `GET /api/operation/state` - Get global operation state
+- `POST /api/operation/state` - Set global operation state
+- `GET /api/health` - System health check
 
 ## Migration from Old Version
 
@@ -194,7 +194,7 @@ Contributions are welcome! Please:
 
 ## Support
 
-For issues and feature requests, please use the [GitHub issue tracker](https://github.com/yourusername/rehau-neasmart2.0-integration-ha/issues).
+For issues and feature requests, please use the [GitHub issue tracker](https://github.com/giacomoalonzi/rehau-neasmart2.0-integration-ha/issues).
 
 For general questions about the Rehau Neasmart 2.0 system, consult the official Rehau documentation.
 
