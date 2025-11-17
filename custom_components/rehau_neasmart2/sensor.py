@@ -206,12 +206,22 @@ class RehauNeasmart2ZoneSetpointSensor(RehauNeasmart2GenericSensor):
             if zone_data is not None:
                 self._zone_data = zone_data
                 if zone_data.setpoint:
-                    self._attr_native_value = zone_data.setpoint.value
-                    _LOGGER.debug(
-                        "Updated setpoint sensor %s: %s",
-                        self._attr_unique_id,
-                        self._attr_native_value
-                    )
+                    setpoint_value = float(zone_data.setpoint.value)
+                    # Setpoint of -17.7 indicates "off" or "not set", show as None (which displays as "--")
+                    # Use tolerance for float comparison (handle -17.7, -17.70, etc.)
+                    if abs(setpoint_value - (-17.7)) < 0.1:
+                        self._attr_native_value = None
+                        _LOGGER.debug(
+                            "Setpoint sensor %s: setpoint is -17.7 (zone off), showing as --",
+                            self._attr_unique_id
+                        )
+                    else:
+                        self._attr_native_value = setpoint_value
+                        _LOGGER.debug(
+                            "Updated setpoint sensor %s: %s",
+                            self._attr_unique_id,
+                            self._attr_native_value
+                        )
                 else:
                     self._attr_native_value = None
                     _LOGGER.debug(

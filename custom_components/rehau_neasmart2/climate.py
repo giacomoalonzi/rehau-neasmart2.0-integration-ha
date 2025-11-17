@@ -150,7 +150,8 @@ class RehauNeasmart2ZoneClimateEntity(RehauNeasmart2GenericClimateEntity):
             self._zone_data = zone_data
             
             # Update HVAC mode and preset mode based on zone state
-            if zone_data.state == ZoneState.OFF:
+            # Show as OFF when state is OFF or STANDBY
+            if zone_data.state == ZoneState.OFF or zone_data.state == ZoneState.STANDBY:
                 self._attr_hvac_mode = HVACMode.OFF
                 self._attr_preset_mode = None
             else:
@@ -162,8 +163,25 @@ class RehauNeasmart2ZoneClimateEntity(RehauNeasmart2GenericClimateEntity):
             self._attr_current_temperature = float(zone_data.temperature.value)
             
             # Update target temperature if available
+            # Setpoint of -17.7 indicates "off" or "not set", show as "--" (None)
             if zone_data.setpoint:
-                self._attr_target_temperature = float(zone_data.setpoint.value)
+                setpoint_value = float(zone_data.setpoint.value)
+                _LOGGER.debug(
+                    "Zone %s setpoint value: %.10f (checking if == -17.7)",
+                    self._attr_unique_id, setpoint_value
+                )
+                # Use tolerance for float comparison (handle -17.7, -17.70, etc.)
+                if abs(setpoint_value - (-17.7)) < 0.1:
+                    # Special value indicating zone is off/not set, show as "--"
+                    _LOGGER.debug(
+                        "Zone %s setpoint %.1f treated as -17.7, setting target_temperature to None (--)",
+                        self._attr_unique_id, setpoint_value
+                    )
+                    self._attr_target_temperature = None
+                else:
+                    self._attr_target_temperature = setpoint_value
+            else:
+                self._attr_target_temperature = None
             
             # Validate ranges
             if not -50 <= self._attr_current_temperature <= 100:
